@@ -2,13 +2,13 @@
 
 AgentForge is a local-first self-improving Agent system with Skill generation, versioned artifacts, traceable execution, hierarchical memory, and HQS diagnostics.
 
-This repository is currently implementing **Phase 1**: generating a compliant `SKILL.md` from a one-line requirement or a multi-turn conversation.
+This repository has completed **Phase 1** and now includes the **Phase 2 MVP**: running versioned Skills on task sets, scoring outputs with HQS, reflecting on results, and rewriting the next Skill version.
 
 ## Core Concepts
 
 - **Skill**: a reusable Markdown instruction file saved under `skills/<skill_slug>/<version>/SKILL.md`.
 - **Trace**: a JSON record of an important run, saved under `traces/`.
-- **HQS**: Health & Quality Score. Full scoring arrives in Phase 2.
+- **HQS**: Health & Quality Score. Phase 2 includes deterministic Skill-level scoring.
 - **Memory**: three-layer Agent memory. Full memory arrives in Phase 3.
 
 ## Installation
@@ -33,7 +33,7 @@ Activate the environment if you want to run commands directly:
 .venv\Scripts\activate
 ```
 
-The Phase 1 runtime code only uses the Python standard library. `pytest` is installed for development tests.
+The core runtime uses the Python standard library. JSON task sets need no extra packages; YAML task sets require optional `PyYAML` if you choose to use them. `pytest` is installed for development tests.
 
 ## Model Providers
 
@@ -116,6 +116,34 @@ Validate an existing Skill:
 agentforge validate-skill skills/ui_review_skill/v1/SKILL.md
 ```
 
+Run a Skill against one input with deterministic local execution:
+
+```bash
+python -m agentforge run-skill --skill skills/ui_review_skill/v1/SKILL.md --input "Review this dashboard layout for hierarchy and readability."
+```
+
+Use a configured provider for Skill execution:
+
+```bash
+python -m agentforge run-skill --use-provider --provider dashscope --skill skills/ui_review_skill/v1/SKILL.md --input "Review this dashboard layout."
+```
+
+Evolve a Skill against a task set:
+
+```bash
+python -m agentforge evolve-skill --skill skills/ui_review_skill/v1/SKILL.md --taskset tasksets/ui_review_basic.json --max-iterations 3
+```
+
+Create a starter task set automatically when the target JSON file does not exist:
+
+```bash
+python -m agentforge evolve-skill --auto-create-taskset --skill skills/ui_review_skill/v1/SKILL.md --taskset tasksets/ui_review_basic.json --max-iterations 1
+```
+
+By default, Phase 2 execution and rewriting use deterministic local logic. Pass `--use-provider` to route execution and rewriting through the configured provider adapter.
+
+Evolution uses a stability gate before accepting a new version. AgentForge first proposes a candidate Skill under the run directory, runs that candidate on the same task set, scores it with HQS, and only writes `skills/<skill_slug>/vN/SKILL.md` when the candidate does not regress and improves by at least `--min-improvement` (`0.01` by default). Use `--min-improvement 0` if you explicitly want to accept equal-scoring rewrites.
+
 ## Skill File Format
 
 Every generated Skill must include:
@@ -144,6 +172,66 @@ Every generated Skill must include:
 ## Version Notes
 ```
 
+## Task Set Format
+
+Phase 2 can read JSON task sets:
+
+```json
+{
+  "name": "ui_review_basic",
+  "description": "Basic UI review cases.",
+  "tasks": [
+    {
+      "id": "dashboard_layout",
+      "input": "Review dashboard layout, visual hierarchy, and data readability.",
+      "expected_output": ["issues", "reasons", "recommendations"],
+      "criteria": ["structured report", "specific suggestions"]
+    }
+  ]
+}
+```
+
+`--auto-create-taskset` can bootstrap a starter JSON task set from the Skill, but it is intended as a convenience baseline. Review and edit generated task sets before treating them as stable benchmarks.
+
+## Phase 2 Artifacts
+
+Skill runs are saved under:
+
+```text
+runs/<skill_slug>/<version>/<timestamp>/
+```
+
+Each run stores:
+
+- `taskset.json`
+- `skill_snapshot.md`
+- `outputs/<task_id>.md`
+- `run_result.json`
+- `hqs_report.json` during evolution
+- `reflection.md` during evolution
+- `candidate/SKILL.md` and `candidate/decision.json` during evolution when a rewrite is proposed
+
+Each rewrite creates the next version without overwriting prior versions:
+
+```text
+skills/<skill_slug>/v2/SKILL.md
+skills/<skill_slug>/v2/metadata.json
+skills/<skill_slug>/v2/diff.patch
+```
+
+## HQS Scoring
+
+The Phase 2 deterministic evaluator scores each task output on `0-5` dimensions:
+
+- Task Completion
+- Instruction Following
+- Output Structure
+- Specificity
+- Robustness
+- Risk / Hallucination Control
+
+The final HQS is the average of those dimensions across the task set.
+
 ## Trace Format
 
 Skill generation traces include:
@@ -167,6 +255,12 @@ Skill generation traces include:
 
 For Phase 1 compatibility, the trace also exposes `parsed_requirement`, `generated_skill_path`, and `validation_result` at the top level.
 
+Phase 2 writes additional traces:
+
+- `skill_execution`
+- `skill_evaluation`
+- `skill_evolution`
+
 ## Directory Structure
 
 ```text
@@ -182,6 +276,17 @@ src/agentforge/
     requirement_parser.py
     skill_schema.py
     skill_writer.py
+  skill_evolver/
+    task_loader.py
+    skill_runner.py
+    hqs_evaluator.py
+    reflector.py
+    rewriter.py
+    version_manager.py
+    diff_writer.py
+    evolution_loop.py
+tasksets/
+runs/
 skills/
 traces/
 tests/

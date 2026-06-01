@@ -1,0 +1,290 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from agentforge.common.file_store import write_json, write_text
+from agentforge.common.llm_client import LLMClient
+from agentforge.common.trace import trace_timestamp, write_trace
+from agentforge.skill_evolver.task_loader import Task, TaskSet
+from agentforge.skill_evolver.version_manager import parse_skill_version_path
+from agentforge.skill_generator.skill_schema import validate_skill
+
+
+@dataclass(frozen=True)
+class TaskOutput:
+    task_id: str
+    input: str
+    output: str
+    output_path: Path | None = None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "input": self.input,
+            "output": self.output,
+            "output_path": str(self.output_path) if self.output_path else None,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class SkillRunResult:
+    skill_path: Path
+    run_dir: Path
+    outputs: list[TaskOutput]
+    result_path: Path
+    trace_path: Path
+    mode: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "skill_path": str(self.skill_path),
+            "run_dir": str(self.run_dir),
+            "outputs": [output.to_dict() for output in self.outputs],
+            "result_path": str(self.result_path),
+            "trace_path": str(self.trace_path),
+            "mode": self.mode,
+        }
+
+
+SKILL_RUN_SYSTEM_PROMPT = (
+    "You are AgentForge's Skill runner. Execute the supplied SKILL.md against the task input. "
+    "Follow the Skill workflow and constraints, and return only the task output."
+)
+
+
+def run_skill(
+    skill_path: Path | str,
+    input_text: str,
+    project_root: Path | str = ".",
+    llm_client: LLMClient | None = None,
+) -> SkillRunResult:
+    taskset = TaskSet(
+        name="single_input",
+        description="Single Skill execution from CLI input.",
+        tasks=[Task(task_id="input", input=input_text, criteria=[], metadata={})],
+    )
+    return run_skill_on_taskset(skill_path, taskset, project_root=project_root, llm_client=llm_client)
+
+
+def run_skill_on_taskset(
+    skill_path: Path | str,
+    taskset: TaskSet,
+    project_root: Path | str = ".",
+    llm_client: LLMClient | None = None,
+) -> SkillRunResult:
+    root = Path(project_root).resolve()
+    resolved_skill_path = Path(skill_path).resolve()
+    if not resolved_skill_path.exists():
+        raise ValueError(f"Skill not found: {resolved_skill_path}")
+
+    skill_markdown = resolved_skill_path.read_text(encoding="utf-8")
+    validation = validate_skill(skill_markdown)
+    if not validation.valid:
+        raise ValueError(f"Skill failed schema validation: {validation.to_dict()}")
+
+    info = parse_skill_version_path(resolved_skill_path)
+    return run_skill_markdown_on_taskset(
+        skill_markdown=skill_markdown,
+        skill_path=resolved_skill_path,
+        skill_slug=info.skill_slug,
+        version=info.version,
+        taskset=taskset,
+        project_root=root,
+        llm_client=llm_client,
+    )
+
+
+def run_skill_markdown_on_taskset(
+    skill_markdown: str,
+    skill_path: Path | str,
+    skill_slug: str,
+    version: str,
+    taskset: TaskSet,
+    project_root: Path | str = ".",
+    llm_client: LLMClient | None = None,
+) -> SkillRunResult:
+    root = Path(project_root).resolve()
+    resolved_skill_path = Path(skill_path).resolve()
+    validation = validate_skill(skill_markdown)
+    if not validation.valid:
+        raise ValueError(f"Skill failed schema validation: {validation.to_dict()}")
+
+    run_dir = root / "runs" / skill_slug / version / trace_timestamp()
+    output_dir = run_dir / "outputs"
+    write_json(run_dir / "taskset.json", taskset.to_dict())
+    write_text(run_dir / "skill_snapshot.md", skill_markdown)
+
+    steps: list[dict[str, Any]] = [
+        {
+            "name": "load_skill",
+            "status": "completed",
+            "path": str(resolved_skill_path),
+            "validation": validation.to_dict(),
+        },
+        {"name": "load_taskset", "status": "completed", "task_count": len(taskset.tasks)},
+    ]
+    errors: list[dict[str, Any]] = []
+    outputs: list[TaskOutput] = []
+    mode = "model" if llm_client else "local"
+
+    for task in taskset.tasks:
+        output = ""
+        error = None
+        try:
+            output = _run_single_task(skill_markdown, task, llm_client=llm_client)
+            status = "completed"
+        except Exception as exc:
+            status = "failed"
+            error = str(exc)
+            errors.append({"task_id": task.task_id, "error_type": exc.__class__.__name__, "message": str(exc)})
+            output = _local_fallback_output(skill_markdown, task, execution_error=str(exc))
+
+        output_path = write_text(output_dir / f"{_safe_filename(task.task_id)}.md", output)
+        outputs.append(TaskOutput(task_id=task.task_id, input=task.input, output=output, output_path=output_path, error=error))
+        steps.append({"name": "run_task", "status": status, "task_id": task.task_id, "output_path": str(output_path)})
+
+    result_payload = {
+        "skill": {
+            "skill_slug": skill_slug,
+            "version": version,
+            "skill_path": str(resolved_skill_path),
+        },
+        "taskset": taskset.to_dict(),
+        "mode": mode,
+        "provider": llm_client.metadata() if llm_client else None,
+        "outputs": [output.to_dict() for output in outputs],
+    }
+    result_path = write_json(run_dir / "run_result.json", result_payload)
+    trace_path = write_trace(
+        project_root=root,
+        trace_type="skill_execution",
+        input_data={"skill_path": str(resolved_skill_path), "taskset": taskset.to_dict()},
+        output={"run_dir": _relative_or_absolute(run_dir, root), "result_path": _relative_or_absolute(result_path, root)},
+        steps=steps,
+        artifacts=[
+            {"type": "run_result", "path": _relative_or_absolute(result_path, root)},
+            {"type": "run_directory", "path": _relative_or_absolute(run_dir, root)},
+        ],
+        errors=errors,
+    )
+
+    return SkillRunResult(
+        skill_path=resolved_skill_path,
+        run_dir=run_dir,
+        outputs=outputs,
+        result_path=result_path,
+        trace_path=trace_path,
+        mode=mode,
+    )
+
+
+def _run_single_task(skill_markdown: str, task: Task, llm_client: LLMClient | None = None) -> str:
+    if llm_client:
+        prompt = "\n\n".join(
+            [
+                "SKILL.md:",
+                skill_markdown,
+                "Task input:",
+                task.input,
+                "Return a structured task output. Do not include provider or system diagnostics.",
+            ]
+        )
+        return llm_client.complete(prompt, system_prompt=SKILL_RUN_SYSTEM_PROMPT).strip() + "\n"
+    return _local_fallback_output(skill_markdown, task)
+
+
+def _local_fallback_output(skill_markdown: str, task: Task, execution_error: str | None = None) -> str:
+    title = _extract_title(skill_markdown)
+    workflow = _extract_section_lines(skill_markdown, "Workflow")
+    constraints = _extract_section_lines(skill_markdown, "Constraints")
+    criteria = _extract_section_lines(skill_markdown, "Quality Criteria")
+    task_terms = ", ".join(_keywords(task.input)[:6]) or "the supplied task"
+
+    lines = [
+        "# Skill Run Output",
+        "",
+        "## Task",
+        "",
+        task.input.strip(),
+        "",
+        "## Applied Skill",
+        "",
+        f"- {title}",
+        "",
+        "## Result",
+        "",
+        f"- Restated intent: handle the task about {task_terms}.",
+        "- Recommended approach: follow the Skill workflow and return a structured, evidence-based result.",
+        "- Actionable output: identify concrete findings, explain why they matter, and list next steps.",
+        "",
+        "## Workflow Used",
+        "",
+    ]
+    lines.extend(_limit_bullets(workflow, fallback=["Restate the task.", "Apply the Skill workflow.", "Return structured results."]))
+    lines.extend(["", "## Constraints Observed", ""])
+    lines.extend(_limit_bullets(constraints, fallback=["Do not invent facts beyond the task input."]))
+    lines.extend(["", "## Quality Checks", ""])
+    lines.extend(_limit_bullets(criteria, fallback=["Output is specific, structured, and actionable."]))
+    lines.extend(["", "## Assumptions and Gaps", ""])
+    lines.append("- This deterministic local runner does not call a model; it records a transparent baseline output.")
+    if execution_error:
+        lines.append(f"- Model execution failed, so this fallback output was used: {execution_error}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _extract_title(markdown: str) -> str:
+    for line in markdown.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return "Untitled Skill"
+
+
+def _extract_section_lines(markdown: str, section: str) -> list[str]:
+    lines = markdown.splitlines()
+    collected: list[str] = []
+    in_section = False
+    for line in lines:
+        if line.strip() == f"## {section}":
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section and line.strip():
+            collected.append(line.strip())
+    return collected
+
+
+def _limit_bullets(lines: list[str], fallback: list[str], limit: int = 5) -> list[str]:
+    selected = lines[:limit] if lines else fallback
+    result = []
+    for line in selected:
+        cleaned = line.lstrip("-0123456789. ").strip()
+        if cleaned:
+            result.append(f"- {cleaned}")
+    return result
+
+
+def _keywords(text: str) -> list[str]:
+    normalized = "".join(char.lower() if char.isalnum() else " " for char in text)
+    stopwords = {"the", "and", "for", "with", "this", "that", "from", "into", "about", "please"}
+    result: list[str] = []
+    for token in normalized.split():
+        if len(token) >= 3 and token not in stopwords and token not in result:
+            result.append(token)
+    return result
+
+
+def _safe_filename(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value.strip())
+    return cleaned or "task"
+
+
+def _relative_or_absolute(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)

@@ -7,6 +7,9 @@ from pathlib import Path
 
 from agentforge.common.llm_client import LLMProviderError
 from agentforge.providers import ProviderConfigError, create_llm_client, load_provider_config
+from agentforge.skill_evolver.evolution_loop import evolve_skill
+from agentforge.skill_evolver.skill_runner import run_skill
+from agentforge.skill_evolver.taskset_bootstrap import create_taskset_from_skill
 from agentforge.skill_generator.generator import generate_skill_from_input
 from agentforge.skill_generator.skill_schema import validate_skill
 
@@ -44,6 +47,59 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate-skill", help="Validate a SKILL.md file.")
     validate.add_argument("path", type=Path, help="Path to SKILL.md.")
     validate.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    run = subparsers.add_parser("run-skill", help="Run a versioned Skill against one input.")
+    run.add_argument("--skill", type=Path, required=True, help="Path to skills/<skill_slug>/<version>/SKILL.md.")
+    run_input_group = run.add_mutually_exclusive_group(required=True)
+    run_input_group.add_argument("--input", help="Task input text.")
+    run_input_group.add_argument("--input-file", type=Path, help="Path to a text file containing the task input.")
+    run.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for runs/ and traces/.")
+    run.add_argument(
+        "--provider-config",
+        type=Path,
+        default=Path("config/providers.json"),
+        help="Provider JSON path. Relative paths are resolved under --project-root.",
+    )
+    run.add_argument("--provider", help="Provider name in the provider JSON.")
+    run.add_argument("--model", help="Override the configured model name.")
+    run.add_argument(
+        "--use-provider",
+        action="store_true",
+        help="Use the configured model provider instead of deterministic local execution.",
+    )
+    run.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    evolve = subparsers.add_parser("evolve-skill", help="Run a Skill evolution loop against a task set.")
+    evolve.add_argument("--skill", type=Path, required=True, help="Path to skills/<skill_slug>/<version>/SKILL.md.")
+    evolve.add_argument("--taskset", type=Path, required=True, help="Path to a JSON or YAML task set.")
+    evolve.add_argument(
+        "--auto-create-taskset",
+        action="store_true",
+        help="Create a starter JSON task set if --taskset does not exist, then continue evolution.",
+    )
+    evolve.add_argument("--max-iterations", type=int, default=3, help="Maximum rewrite iterations.")
+    evolve.add_argument("--target-hqs", type=float, default=5.0, help="Stop when average HQS reaches this score.")
+    evolve.add_argument(
+        "--min-improvement",
+        type=float,
+        default=0.01,
+        help="Reject candidate rewrites that improve HQS by less than this amount.",
+    )
+    evolve.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for runs/ and traces/.")
+    evolve.add_argument(
+        "--provider-config",
+        type=Path,
+        default=Path("config/providers.json"),
+        help="Provider JSON path. Relative paths are resolved under --project-root.",
+    )
+    evolve.add_argument("--provider", help="Provider name in the provider JSON.")
+    evolve.add_argument("--model", help="Override the configured model name.")
+    evolve.add_argument(
+        "--use-provider",
+        action="store_true",
+        help="Use the configured model provider for execution and rewriting.",
+    )
+    evolve.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     return parser
 
@@ -106,6 +162,76 @@ def main(argv: list[str] | None = None) -> int:
                 print("Missing sections: " + ", ".join(result.missing_sections))
         return 0 if result.valid else 2
 
+    if args.command == "run-skill":
+        try:
+            input_text = args.input if args.input is not None else args.input_file.read_text(encoding="utf-8")
+            project_root = args.project_root.resolve()
+            llm_client = _optional_llm_client(args, project_root)
+            result = run_skill(args.skill, input_text, project_root=project_root, llm_client=llm_client)
+        except (ProviderConfigError, LLMProviderError, ValueError, OSError) as exc:
+            parser.exit(1, f"error: {exc}\n")
+
+        payload = {
+            "skill_path": str(result.skill_path),
+            "run_dir": str(result.run_dir),
+            "result_path": str(result.result_path),
+            "trace_path": str(result.trace_path),
+            "mode": result.mode,
+            "outputs": [output.to_dict() for output in result.outputs],
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"Run directory: {result.run_dir}")
+            print(f"Run result: {result.result_path}")
+            print(f"Trace: {result.trace_path}")
+            print(f"Mode: {result.mode}")
+        return 0
+
+    if args.command == "evolve-skill":
+        try:
+            project_root = args.project_root.resolve()
+            llm_client = _optional_llm_client(args, project_root)
+            skill_path = _resolve_project_path(project_root, args.skill)
+            taskset_path = _resolve_project_path(project_root, args.taskset)
+            created_taskset_path = None
+            if args.auto_create_taskset and not taskset_path.exists():
+                created_taskset_path = create_taskset_from_skill(skill_path, taskset_path)
+            result = evolve_skill(
+                skill_path,
+                taskset_path,
+                project_root=project_root,
+                max_iterations=args.max_iterations,
+                target_hqs=args.target_hqs,
+                min_improvement=args.min_improvement,
+                llm_client=llm_client,
+            )
+        except (ProviderConfigError, LLMProviderError, ValueError, OSError) as exc:
+            parser.exit(1, f"error: {exc}\n")
+
+        payload = result.to_dict()
+        payload["created_taskset_path"] = str(created_taskset_path) if created_taskset_path else None
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            if created_taskset_path:
+                print(f"Created task set: {created_taskset_path}")
+            print(f"Final Skill: {result.final_skill_path}")
+            print(f"Trace: {result.trace_path}")
+            print(f"Stop reason: {result.stop_reason}")
+            for iteration in result.iterations:
+                print(f"Iteration {iteration.iteration}: HQS {iteration.hqs_report.average_score:.2f}")
+                if iteration.candidate_hqs_report:
+                    print(
+                        "  Candidate: "
+                        f"HQS {iteration.candidate_hqs_report.average_score:.2f}, "
+                        f"improvement {iteration.candidate_improvement:.2f}, "
+                        f"decision {iteration.decision}"
+                    )
+                if iteration.rewritten_skill:
+                    print(f"  New version: {iteration.rewritten_skill.skill_path}")
+        return 0
+
     parser.print_help()
     return 0
 
@@ -114,6 +240,18 @@ def _resolve_project_path(project_root: Path, path: Path) -> Path:
     if path.is_absolute():
         return path
     return project_root / path
+
+
+def _optional_llm_client(args: argparse.Namespace, project_root: Path):
+    if not (args.use_provider or args.provider or args.model):
+        return None
+    provider_config_path = _resolve_project_path(project_root, args.provider_config)
+    provider_config = load_provider_config(
+        provider_config_path,
+        provider_name=args.provider,
+        model_override=args.model,
+    )
+    return create_llm_client(provider_config)
 
 
 if __name__ == "__main__":

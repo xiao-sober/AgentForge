@@ -9,7 +9,8 @@ build/
 dist/
 *.egg-info/
 data/
-runs/
+runs/*
+!runs/.gitkeep
 config/providers.json
 config/*.local.json
 skills/*

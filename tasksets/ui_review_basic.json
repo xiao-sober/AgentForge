@@ -1,0 +1,42 @@
+{
+  "name": "ui_review_basic",
+  "description": "Basic UI review task set for testing Skill execution, HQS scoring, reflection, and rewriting.",
+  "metadata": {
+    "schema_version": "taskset.v1",
+    "created_by": "agentforge_manual_starter",
+    "status": "starter",
+    "review_required": true
+  },
+  "tasks": [
+    {
+      "id": "dashboard_layout",
+      "input": "Review a SaaS analytics dashboard with a crowded top KPI row, a dense line chart, a sidebar navigation, and a data table. Focus on hierarchy, readability, interaction clarity, and actionable fixes.",
+      "expected_output": [
+        "visible or described UI issues",
+        "reasons tied to layout, hierarchy, readability, or interaction flow",
+        "actionable optimization suggestions",
+        "priority labels or clear sequencing"
+      ],
+      "criteria": [
+        "structured report",
+        "specific recommendations",
+        "uncertainty handling",
+        "no invented visual details beyond the task input"
+      ]
+    },
+    {
+      "id": "empty_context_handling",
+      "input": "Review this dashboard layout.",
+      "expected_output": [
+        "state that the available context is insufficient",
+        "ask for screenshot or page description",
+        "avoid inventing UI details"
+      ],
+      "criteria": [
+        "risk control",
+        "clear missing-input explanation",
+        "concrete list of required inputs"
+      ]
+    }
+  ]
+}
