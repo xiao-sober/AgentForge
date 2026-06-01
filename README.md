@@ -68,8 +68,6 @@ Then edit `config/providers.json`:
 }
 ```
 
-`config/providers.json` is ignored by git so real API keys do not get committed.
-
 You can add other platforms by adding more entries under `providers` and changing `default_provider` or passing `--provider`.
 
 Enable Qwen thinking mode for complex Skill generation tasks:
