@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentforge"
+version = "0.1.0"
+description = "Local-first self-improving agent system with Skill generation and HQS diagnostics."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "AgentForge Contributors" }
+]
+dependencies = []
+
+[project.scripts]
+agentforge = "agentforge.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

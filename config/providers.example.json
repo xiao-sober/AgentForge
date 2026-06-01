@@ -1,0 +1,27 @@
+{
+  "default_provider": "dashscope",
+  "providers": {
+    "dashscope": {
+      "type": "openai_compatible",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "replace-me",
+      "model": "qwen3.6-plus",
+      "timeout_seconds": 60,
+      "temperature": 0.2,
+      "max_tokens": 2500,
+      "thinking_mode": {
+        "enabled": false,
+        "provider": "qwen"
+      }
+    },
+    "openai_compatible_example": {
+      "type": "openai_compatible",
+      "base_url": "https://api.example.com/v1",
+      "api_key": "replace-me",
+      "model": "example-model",
+      "timeout_seconds": 60,
+      "temperature": 0.2,
+      "max_tokens": 2500
+    }
+  }
+}
