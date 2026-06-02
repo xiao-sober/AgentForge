@@ -1,0 +1,20 @@
+{
+  "name": "sample_ui_review_basic",
+  "description": "Sample UI review tasks for first-run AgentForge Skill execution and evolution tests.",
+  "tasks": [
+    {
+      "id": "dashboard_readability",
+      "input": "Review an admin dashboard with dense metrics, low-contrast secondary labels, and several unclear action buttons.",
+      "expected_output": ["issues", "reasons", "recommendations", "priority", "assumptions"],
+      "criteria": ["structured report", "specific UI recommendations", "uncertainty handling"],
+      "tag": "sample"
+    },
+    {
+      "id": "form_workflow",
+      "input": "Review a settings form where required fields, validation feedback, and save state are not obvious.",
+      "expected_output": ["workflow issues", "validation feedback", "recommendations"],
+      "criteria": ["actionable next steps", "risk control"],
+      "tag": "sample"
+    }
+  ]
+}

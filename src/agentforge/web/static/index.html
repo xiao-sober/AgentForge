@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentForge</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>AgentForge</h1>
+      <p id="statusText" data-i18n="statusLoading">Checking local runtime...</p>
+    </div>
+    <nav class="navlinks" aria-label="API links">
+      <a href="/health" data-i18n="health">Health</a>
+      <a href="/skills" data-i18n="skills">Skills</a>
+      <a href="/tasksets" data-i18n="tasksets">Tasksets</a>
+      <a href="/traces" data-i18n="traces">Traces</a>
+      <button id="languageToggle" class="secondary" type="button">中文</button>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="workspace">
+      <section class="settings-panel">
+        <div>
+          <h2 data-i18n="runMode">Run Mode</h2>
+          <p data-i18n="runModeHelp">Use local deterministic mode or call the default configured model provider.</p>
+        </div>
+        <label class="toggle mode-toggle">
+          <input id="useProvider" type="checkbox">
+          <span data-i18n="useProvider">Call model</span>
+        </label>
+        <span id="modeHint" class="mode-hint" data-i18n="localModeHint">Local deterministic mode</span>
+      </section>
+
+      <div class="tabs" role="tablist" aria-label="AgentForge workflows">
+        <button class="tab active" data-tab="chat" type="button" data-i18n="tabChat">Chat</button>
+        <button class="tab" data-tab="generate" type="button" data-i18n="tabGenerate">Generate Skill</button>
+        <button class="tab" data-tab="run" type="button" data-i18n="tabRun">Run Skill</button>
+        <button class="tab" data-tab="evolve" type="button" data-i18n="tabEvolve">Evolve Skill</button>
+      </div>
+
+      <section id="panel-chat" class="panel active">
+        <label for="chatMessage" data-i18n="message">Message</label>
+        <textarea id="chatMessage">Review this dashboard layout for readability.</textarea>
+        <div class="toolbar">
+          <button id="chatSend" type="button" data-i18n="run">Run</button>
+          <label class="toggle">
+            <input id="chatDebug" type="checkbox">
+            <span data-i18n="debug">Debug</span>
+          </label>
+        </div>
+      </section>
+
+      <section id="panel-generate" class="panel">
+        <label for="generateInput" data-i18n="requirement">Requirement</label>
+        <textarea id="generateInput">Create a UI review Skill for dashboards and admin pages.</textarea>
+        <div class="toolbar">
+          <button id="generateSend" type="button" data-i18n="generateSkill">Generate Skill</button>
+        </div>
+      </section>
+
+      <section id="panel-run" class="panel">
+        <div class="field-grid">
+          <label>
+            <span data-i18n="skill">Skill</span>
+            <select id="runSkill"></select>
+          </label>
+        </div>
+        <label for="runInput" data-i18n="taskInput">Task input</label>
+        <textarea id="runInput">Review an admin dashboard with dense metrics, low-contrast labels, and unclear action buttons.</textarea>
+        <div class="toolbar">
+          <button id="runSend" type="button" data-i18n="runSkill">Run Skill</button>
+        </div>
+      </section>
+
+      <section id="panel-evolve" class="panel">
+        <div class="field-grid two">
+          <label>
+            <span data-i18n="skill">Skill</span>
+            <select id="evolveSkill"></select>
+          </label>
+          <label>
+            <span data-i18n="taskset">Taskset</span>
+            <select id="evolveTaskset"></select>
+          </label>
+          <label>
+            <span data-i18n="maxIterations">Max iterations</span>
+            <input id="maxIterations" type="number" min="1" max="10" value="1">
+          </label>
+          <label>
+            <span data-i18n="minImprovement">Min improvement</span>
+            <input id="minImprovement" type="number" step="0.01" value="0.01">
+          </label>
+        </div>
+        <div class="toolbar">
+          <button id="evolveSend" type="button" data-i18n="evolveSkill">Evolve Skill</button>
+        </div>
+      </section>
+
+      <section id="result" class="result empty">
+        <p data-i18n="emptyResult">Run a workflow to see results.</p>
+      </section>
+    </section>
+
+    <aside class="sidepanel">
+      <section class="metric-panel">
+        <h2 data-i18n="hqs">HQS</h2>
+        <div class="scoreline">
+          <span id="responseScore" class="score">-</span>
+          <span data-i18n="response">Response</span>
+        </div>
+        <div class="scoreline">
+          <span id="systemScore" class="score">-</span>
+          <span data-i18n="system">System</span>
+        </div>
+      </section>
+
+      <section class="meta-panel">
+        <h2 data-i18n="runSummary">Run</h2>
+        <dl>
+          <dt data-i18n="intent">Intent</dt>
+          <dd id="intentValue">-</dd>
+          <dt data-i18n="plan">Plan</dt>
+          <dd id="planValue">-</dd>
+          <dt data-i18n="skill">Skill</dt>
+          <dd id="skillValue">-</dd>
+          <dt data-i18n="trace">Trace</dt>
+          <dd id="traceValue">-</dd>
+        </dl>
+      </section>
+
+      <section class="meta-panel">
+        <h2 data-i18n="warnings">Warnings</h2>
+        <ul id="warnings" class="list">
+          <li data-i18n="none">None</li>
+        </ul>
+      </section>
+
+      <section class="meta-panel">
+        <h2 data-i18n="timeline">Timeline</h2>
+        <ol id="timeline" class="timeline">
+          <li data-i18n="timelineEmpty">No run yet.</li>
+        </ol>
+      </section>
+    </aside>
+  </main>
+
+  <section class="debug-panel">
+    <details>
+      <summary data-i18n="debugJson">Debug JSON</summary>
+      <pre id="debugOutput">{}</pre>
+    </details>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

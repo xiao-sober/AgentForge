@@ -5,13 +5,17 @@ import json
 import sys
 from pathlib import Path
 
+from agentforge.common.artifacts import cleanup_artifacts
+from agentforge.common.diagnostics import build_config_report, build_health_report, build_version_report
 from agentforge.common.llm_client import LLMProviderError
+from agentforge.common.trace_inspector import format_trace_summary, inspect_trace
 from agentforge.providers import ProviderConfigError, create_llm_client, load_provider_config
 from agentforge.skill_evolver.evolution_loop import evolve_skill
 from agentforge.skill_evolver.skill_runner import run_skill
 from agentforge.skill_evolver.taskset_bootstrap import create_taskset_from_skill
 from agentforge.skill_generator.generator import generate_skill_from_input
 from agentforge.skill_generator.skill_schema import validate_skill
+from agentforge.web.app import run_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -100,6 +104,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the configured model provider for execution and rewriting.",
     )
     evolve.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    serve = subparsers.add_parser("serve", help="Start the Phase 3 local JSON API server.")
+    serve.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for local artifacts.")
+    serve.add_argument("--host", default="127.0.0.1", help="Bind host.")
+    serve.add_argument("--port", type=int, default=8765, help="Bind port.")
+
+    check = subparsers.add_parser("check-config", help="Inspect local health, version, and provider config.")
+    check.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for local artifacts.")
+    check.add_argument(
+        "--provider-config",
+        type=Path,
+        default=Path("config/providers.json"),
+        help="Provider JSON path. Relative paths are resolved under --project-root.",
+    )
+    check.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    inspect = subparsers.add_parser("inspect-trace", help="Print a readable summary of a trace JSON file.")
+    inspect.add_argument("trace", type=Path, help="Trace filename under traces/ or path to a trace JSON file.")
+    inspect.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for traces/.")
+    inspect.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    cleanup = subparsers.add_parser("cleanup-artifacts", help="Apply trace/run artifact retention rules.")
+    cleanup.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for runs/ and traces/.")
+    cleanup.add_argument("--max-traces", type=int, default=200, help="Keep this many newest trace JSON files.")
+    cleanup.add_argument(
+        "--max-runs-per-skill-version",
+        type=int,
+        default=20,
+        help="Keep this many newest run directories per skill/version.",
+    )
+    cleanup.add_argument("--delete", action="store_true", help="Actually delete old artifacts. Omit for dry-run.")
+    cleanup.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
     return parser
 
@@ -230,6 +266,63 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 if iteration.rewritten_skill:
                     print(f"  New version: {iteration.rewritten_skill.skill_path}")
+        return 0
+
+    if args.command == "serve":
+        run_server(project_root=args.project_root.resolve(), host=args.host, port=args.port)
+        return 0
+
+    if args.command == "check-config":
+        project_root = args.project_root.resolve()
+        payload = {
+            "version": build_version_report(project_root),
+            "health": build_health_report(project_root),
+            "config": build_config_report(project_root, provider_config=args.provider_config),
+        }
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(f"AgentForge {payload['version']['version']}")
+            print(f"Project root: {payload['version']['project_root']}")
+            print(f"Health: {payload['health']['status']}")
+            print(f"Config: {payload['config']['status']}")
+            if payload["config"].get("errors"):
+                print("Config errors:")
+                for error in payload["config"]["errors"]:
+                    print(f"- {error}")
+        return 0 if payload["health"]["status"] == "ok" and payload["config"]["status"] in {"ok", "local_only"} else 2
+
+    if args.command == "inspect-trace":
+        try:
+            summary = inspect_trace(args.trace, project_root=args.project_root.resolve())
+        except (ValueError, OSError) as exc:
+            parser.exit(1, f"error: {exc}\n")
+        if args.json:
+            print(json.dumps(summary, ensure_ascii=False, indent=2))
+        else:
+            print(format_trace_summary(summary))
+        return 0 if summary["schema"]["valid"] else 2
+
+    if args.command == "cleanup-artifacts":
+        try:
+            result = cleanup_artifacts(
+                project_root=args.project_root.resolve(),
+                max_traces=args.max_traces,
+                max_runs_per_skill_version=args.max_runs_per_skill_version,
+                dry_run=not args.delete,
+            )
+        except (ValueError, OSError) as exc:
+            parser.exit(1, f"error: {exc}\n")
+        payload = result.to_dict()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            mode = "dry-run" if result.dry_run else "deleted"
+            print(f"Cleanup mode: {mode}")
+            print(f"Would remove: {len(result.removed)}" if result.dry_run else f"Removed: {len(result.removed)}")
+            print(f"Kept: {len(result.kept)}")
+            for path in result.removed[:20]:
+                print(f"- {path}")
         return 0
 
     parser.print_help()

@@ -203,6 +203,7 @@ def _local_fallback_output(skill_markdown: str, task: Task, execution_error: str
     constraints = _extract_section_lines(skill_markdown, "Constraints")
     criteria = _extract_section_lines(skill_markdown, "Quality Criteria")
     task_terms = ", ".join(_keywords(task.input)[:6]) or "the supplied task"
+    insufficient_context = _is_insufficient_context(task.input, title)
 
     lines = [
         "# Skill Run Output",
@@ -217,13 +218,31 @@ def _local_fallback_output(skill_markdown: str, task: Task, execution_error: str
         "",
         "## Result",
         "",
-        f"- Restated intent: handle the task about {task_terms}.",
-        "- Recommended approach: follow the Skill workflow and return a structured, evidence-based result.",
-        "- Actionable output: identify concrete findings, explain why they matter, and list next steps.",
-        "",
-        "## Workflow Used",
-        "",
     ]
+    if insufficient_context:
+        lines.extend(
+            [
+                f"- Restated intent: review the task about {task_terms}.",
+                "- Available context is insufficient for a concrete UI diagnosis.",
+                "- Needed input: screenshot, page description, visible layout details, data density, interaction states, or target user goal.",
+                "- Local result: no specific UI issue is asserted because the provided input does not describe the actual interface.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"- Restated intent: handle the task about {task_terms}.",
+                "- Recommended approach: follow the Skill workflow and return a structured, evidence-based result.",
+                "- Actionable output: identify concrete findings, explain why they matter, and list next steps.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Workflow Used",
+            "",
+        ]
+    )
     lines.extend(_limit_bullets(workflow, fallback=["Restate the task.", "Apply the Skill workflow.", "Return structured results."]))
     lines.extend(["", "## Constraints Observed", ""])
     lines.extend(_limit_bullets(constraints, fallback=["Do not invent facts beyond the task input."]))
@@ -276,6 +295,37 @@ def _keywords(text: str) -> list[str]:
         if len(token) >= 3 and token not in stopwords and token not in result:
             result.append(token)
     return result
+
+
+def _is_insufficient_context(input_text: str, skill_title: str) -> bool:
+    lowered = input_text.lower()
+    ui_request = any(word in lowered for word in ["ui", "ux", "dashboard", "layout", "screen", "page", "form"])
+    if not ui_request and "ui" not in skill_title.lower():
+        return False
+    concrete_terms = {
+        "screenshot",
+        "image",
+        "chart",
+        "table",
+        "sidebar",
+        "button",
+        "form",
+        "modal",
+        "label",
+        "contrast",
+        "dense",
+        "crowded",
+        "kpi",
+        "navigation",
+        "error",
+        "validation",
+        "state",
+        "metrics",
+        "data",
+    }
+    tokens = set(_keywords(input_text))
+    has_concrete_detail = bool(tokens & concrete_terms)
+    return len(tokens) <= 6 and not has_concrete_detail
 
 
 def _safe_filename(value: str) -> str:
