@@ -28,6 +28,8 @@ class AgentRunLoopTest(unittest.TestCase):
             self.assertEqual(result.output["value"], "ok")
             self.assertEqual(run.steps[0].name, "echo")
             self.assertEqual(run.steps[0].status, "completed")
+            self.assertEqual(run.phase, "executing")
+            self.assertTrue(any(item["reason"] == "echo" for item in run.phase_history))
             self.assertEqual(loop.state.tool_results[0]["call"]["tool_name"], "echo")
 
     def test_unregistered_tool_records_failed_step(self):
@@ -40,6 +42,7 @@ class AgentRunLoopTest(unittest.TestCase):
             self.assertEqual(result.status, "failed")
             self.assertEqual(run.steps[0].status, "failed")
             self.assertEqual(run.steps[0].errors[0]["error_type"], "ValueError")
+            self.assertEqual(run.phase_history[-1]["status"], "failed")
 
 
 if __name__ == "__main__":

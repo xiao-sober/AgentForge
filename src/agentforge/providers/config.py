@@ -89,7 +89,6 @@ def load_provider_config(
     provider_type = str(raw.get("type", "openai_compatible"))
     base_url = _required_string(raw, "base_url", selected_name).rstrip("/")
     model = model_override or _required_string(raw, "model", selected_name)
-    timeout_seconds = int(raw.get("timeout_seconds", 60))
     temperature = float(raw.get("temperature", 0.2))
     max_tokens = int(raw.get("max_tokens", 2500))
     use_env_proxy = _optional_bool(raw.get("use_env_proxy", False), "use_env_proxy", selected_name)
@@ -98,6 +97,7 @@ def load_provider_config(
         api_key = _optional_string(raw.get("api_key"), "api_key", selected_name)
         api_key_env = _optional_string(raw.get("api_key_env"), "api_key_env", selected_name)
         thinking_mode = parse_thinking_mode_config(raw.get("thinking_mode"), selected_name)
+        timeout_seconds = _timeout_seconds(raw.get("timeout_seconds"), thinking_mode, selected_name)
         extra_body = raw.get("extra_body", {})
         if not isinstance(extra_body, dict):
             raise ProviderConfigError(f"Provider '{selected_name}' field 'extra_body' must be an object.")
@@ -139,6 +139,14 @@ def _optional_string(value: Any, field_name: str, provider_name: str) -> str | N
 def _optional_bool(value: Any, field_name: str, provider_name: str) -> bool:
     if not isinstance(value, bool):
         raise ProviderConfigError(f"Provider '{provider_name}' field '{field_name}' must be a boolean.")
+    return value
+
+
+def _timeout_seconds(value: Any, thinking_mode: ThinkingModeConfig, provider_name: str) -> int:
+    if value is None:
+        return 180 if thinking_mode.enabled else 60
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ProviderConfigError(f"Provider '{provider_name}' field 'timeout_seconds' must be a positive integer.")
     return value
 
 

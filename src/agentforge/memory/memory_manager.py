@@ -106,10 +106,20 @@ class MemoryManager:
         return _rank_records(records, query, limit)
 
     def retrieve_context_for_task(self, task_text: str, limit: int = 5) -> dict[str, Any]:
+        episodes = self.search_episodes(task_text, limit=limit)
+        semantic_memory = self.search_semantic_memory(task_text, limit=limit)
         return {
             "working_memory": self.get_working_memory(),
-            "episodes": self.search_episodes(task_text, limit=limit),
-            "semantic_memory": self.search_semantic_memory(task_text, limit=limit),
+            "episodes": episodes,
+            "semantic_memory": semantic_memory,
+            "retrieval": {
+                "query": task_text,
+                "limit": limit,
+                "episode_count": len(episodes),
+                "semantic_count": len(semantic_memory),
+                "episode_scores": _retrieval_summaries(episodes),
+                "semantic_scores": _retrieval_summaries(semantic_memory),
+            },
         }
 
     def summary(self) -> dict[str, Any]:
@@ -140,15 +150,69 @@ class MemoryManager:
 
 def _rank_records(records: list[dict[str, Any]], query: str, limit: int) -> list[dict[str, Any]]:
     query_tokens = set(_tokens(query))
-    scored: list[tuple[int, int, dict[str, Any]]] = []
+    scored: list[tuple[float, int, dict[str, Any], list[str], list[str]]] = []
     for index, record in enumerate(records):
         record_text = _stringify(record)
         record_tokens = set(_tokens(record_text))
-        score = len(query_tokens & record_tokens) if query_tokens else 0
+        matched_tokens = sorted(query_tokens & record_tokens)
+        score = _memory_score(query_tokens, matched_tokens, record)
         if score > 0 or not query_tokens:
-            scored.append((score, index, record))
+            scored.append((score, index, record, matched_tokens, _memory_reasons(query_tokens, matched_tokens, record)))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [record for _, _, record in scored[: max(0, limit)]]
+    ranked = []
+    for rank, (score, _, record, matched_tokens, reasons) in enumerate(scored[: max(0, limit)], start=1):
+        ranked.append(
+            {
+                **record,
+                "_memory_rank": rank,
+                "_memory_score": round(score, 2),
+                "_memory_reasons": reasons,
+                "_memory_matched_tokens": matched_tokens[:20],
+            }
+        )
+    return ranked
+
+
+def _memory_score(query_tokens: set[str], matched_tokens: list[str], record: dict[str, Any]) -> float:
+    if not query_tokens:
+        return 0.1
+    overlap_ratio = len(matched_tokens) / len(query_tokens)
+    score = len(matched_tokens) + overlap_ratio
+    if "hqs" in record or "last_reinforcement" in record:
+        score += 0.25
+    if record.get("best_version") or record.get("selected_skill"):
+        score += 0.2
+    return score
+
+
+def _memory_reasons(query_tokens: set[str], matched_tokens: list[str], record: dict[str, Any]) -> list[str]:
+    reasons = []
+    if not query_tokens:
+        reasons.append("empty_query_fallback")
+    if matched_tokens:
+        reasons.append("token_overlap")
+    if "hqs" in record:
+        reasons.append("episode_has_hqs")
+    if record.get("best_version"):
+        reasons.append("semantic_best_version")
+    if record.get("last_reinforcement"):
+        reasons.append("semantic_reinforcement_history")
+    return reasons or ["low_confidence_match"]
+
+
+def _retrieval_summaries(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries = []
+    for record in records:
+        summaries.append(
+            {
+                "rank": record.get("_memory_rank"),
+                "score": record.get("_memory_score"),
+                "reasons": record.get("_memory_reasons", []),
+                "matched_tokens": record.get("_memory_matched_tokens", []),
+                "key": record.get("key") or record.get("episode_id"),
+            }
+        )
+    return summaries
 
 
 def _tokens(text: str) -> list[str]:

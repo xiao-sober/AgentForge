@@ -15,6 +15,15 @@ from agentforge.skill_evolver.task_loader import TaskSet, load_taskset
 from agentforge.skill_evolver.version_manager import parse_skill_version_path
 
 
+_CRITICAL_HQS_DIMENSIONS = [
+    "Task Completion",
+    "Instruction Following",
+    "Risk / Hallucination Control",
+]
+_TASK_REGRESSION_TOLERANCE = 0.25
+_DIMENSION_REGRESSION_TOLERANCE = 0.25
+
+
 @dataclass(frozen=True)
 class EvolutionIteration:
     iteration: int
@@ -31,6 +40,7 @@ class EvolutionIteration:
     candidate_improvement: float | None
     decision: str
     rewritten_skill: RewrittenSkill | None
+    quality_gate: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +58,7 @@ class EvolutionIteration:
             "candidate_improvement": self.candidate_improvement,
             "decision": self.decision,
             "rewritten_skill": self.rewritten_skill.to_dict() if self.rewritten_skill else None,
+            "quality_gate": self.quality_gate,
         }
 
 
@@ -159,6 +170,12 @@ def evolve_skill(
         candidate_hqs_report = evaluate_taskset(taskset, candidate_run_result)
         candidate_hqs_report_path = write_hqs_report(candidate_run_result.run_dir / "hqs_report.json", candidate_hqs_report)
         candidate_improvement = round(candidate_hqs_report.average_score - hqs_report.average_score, 2)
+        quality_gate = _evaluate_candidate_quality_gate(
+            current=hqs_report,
+            candidate=candidate_hqs_report,
+            min_improvement=min_improvement,
+            candidate_validation=candidate.validation,
+        )
         write_json(
             run_result.run_dir / "candidate" / "decision.json",
             {
@@ -167,6 +184,8 @@ def evolve_skill(
                 "candidate_hqs": candidate_hqs_report.average_score,
                 "candidate_improvement": candidate_improvement,
                 "min_improvement": min_improvement,
+                "quality_gate": quality_gate,
+                "decision": quality_gate["decision"],
             },
         )
 
@@ -178,41 +197,9 @@ def evolve_skill(
             ]
         )
 
-        if candidate_hqs_report.average_score < hqs_report.average_score:
-            stop_reason = "candidate_rejected_regression"
-            decision = "rejected_regression"
-            steps.append(
-                {
-                    "name": "candidate_rejected",
-                    "status": "completed",
-                    "iteration": iteration_number,
-                    "current_hqs": hqs_report.average_score,
-                    "candidate_hqs": candidate_hqs_report.average_score,
-                    "reason": stop_reason,
-                }
-            )
-            iterations.append(
-                _iteration(
-                    iteration_number,
-                    current_skill_path,
-                    run_result,
-                    hqs_report,
-                    hqs_report_path,
-                    reflection_path,
-                    candidate=candidate,
-                    candidate_path=candidate_path,
-                    candidate_run_result=candidate_run_result,
-                    candidate_hqs_report=candidate_hqs_report,
-                    candidate_hqs_report_path=candidate_hqs_report_path,
-                    candidate_improvement=candidate_improvement,
-                    decision=decision,
-                )
-            )
-            break
-
-        if candidate_improvement < min_improvement:
-            stop_reason = "minimum_improvement_not_met"
-            decision = "rejected_minimum_improvement_not_met"
+        if not quality_gate["passed"]:
+            stop_reason = str(quality_gate["stop_reason"])
+            decision = str(quality_gate["decision"])
             steps.append(
                 {
                     "name": "candidate_rejected",
@@ -221,7 +208,7 @@ def evolve_skill(
                     "current_hqs": hqs_report.average_score,
                     "candidate_hqs": candidate_hqs_report.average_score,
                     "candidate_improvement": candidate_improvement,
-                    "min_improvement": min_improvement,
+                    "failed_checks": quality_gate["failed_checks"],
                     "reason": stop_reason,
                 }
             )
@@ -240,6 +227,7 @@ def evolve_skill(
                     candidate_hqs_report_path=candidate_hqs_report_path,
                     candidate_improvement=candidate_improvement,
                     decision=decision,
+                    quality_gate=quality_gate,
                 )
             )
             break
@@ -257,6 +245,7 @@ def evolve_skill(
                 "candidate_hqs_report_path": str(candidate_hqs_report_path),
                 "candidate_hqs_average": candidate_hqs_report.average_score,
                 "candidate_improvement": candidate_improvement,
+                "quality_gate": quality_gate,
                 "accepted": True,
             },
         )
@@ -268,6 +257,7 @@ def evolve_skill(
                 "current_hqs": hqs_report.average_score,
                 "candidate_hqs": candidate_hqs_report.average_score,
                 "candidate_improvement": candidate_improvement,
+                "quality_gate": quality_gate,
                 "new_skill_path": str(rewritten_skill.skill_path),
             }
         )
@@ -295,6 +285,7 @@ def evolve_skill(
                 candidate_improvement=candidate_improvement,
                 decision="accepted",
                 rewritten_skill=rewritten_skill,
+                quality_gate=quality_gate,
             )
         )
         current_skill_path = rewritten_skill.skill_path
@@ -318,6 +309,10 @@ def evolve_skill(
             "candidate_gate": {
                 "reject_regression": True,
                 "min_improvement": min_improvement,
+                "reject_task_regression": True,
+                "reject_critical_dimension_regression": True,
+                "reject_skill_schema_warnings": True,
+                "critical_dimensions": _CRITICAL_HQS_DIMENSIONS,
             },
         },
         output=trace_output,
@@ -355,6 +350,171 @@ def _evaluate_candidate(
     )
 
 
+def _evaluate_candidate_quality_gate(
+    current: HQSReport,
+    candidate: HQSReport,
+    min_improvement: float,
+    candidate_validation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidate_improvement = round(candidate.average_score - current.average_score, 2)
+    current_task_scores = _task_scores(current)
+    candidate_task_scores = _task_scores(candidate)
+    current_min_task = min(current_task_scores.values()) if current_task_scores else current.average_score
+    candidate_min_task = min(candidate_task_scores.values()) if candidate_task_scores else candidate.average_score
+    current_dimensions = _dimension_averages(current)
+    candidate_dimensions = _dimension_averages(candidate)
+    task_regressions = _task_regressions(current_task_scores, candidate_task_scores)
+    critical_dimension_regressions = _critical_dimension_regressions(current_dimensions, candidate_dimensions)
+    schema_issues = _candidate_schema_issues(candidate_validation)
+
+    checks = {
+        "average_regression": {
+            "passed": candidate.average_score >= current.average_score,
+            "current": current.average_score,
+            "candidate": candidate.average_score,
+        },
+        "minimum_improvement": {
+            "passed": candidate_improvement >= min_improvement,
+            "candidate_improvement": candidate_improvement,
+            "min_improvement": min_improvement,
+        },
+        "task_regression": {
+            "passed": not task_regressions,
+            "tolerance": _TASK_REGRESSION_TOLERANCE,
+            "regressions": task_regressions,
+            "current_min_task_average": round(current_min_task, 2),
+            "candidate_min_task_average": round(candidate_min_task, 2),
+        },
+        "critical_dimension_regression": {
+            "passed": not critical_dimension_regressions,
+            "tolerance": _DIMENSION_REGRESSION_TOLERANCE,
+            "critical_dimensions": _CRITICAL_HQS_DIMENSIONS,
+            "regressions": critical_dimension_regressions,
+        },
+        "skill_schema": {
+            "passed": not schema_issues,
+            "issues": schema_issues,
+            "validation": candidate_validation or {},
+        },
+    }
+    failed_checks = [name for name, check in checks.items() if not check["passed"]]
+    if not failed_checks:
+        return {
+            "passed": True,
+            "decision": "accepted",
+            "stop_reason": None,
+            "failed_checks": [],
+            "checks": checks,
+            "summary": (
+                "Candidate passed average, minimum improvement, task regression, "
+                "critical dimension, and Skill schema checks."
+            ),
+        }
+
+    primary = failed_checks[0]
+    decisions = {
+        "average_regression": ("rejected_regression", "candidate_rejected_regression"),
+        "minimum_improvement": ("rejected_minimum_improvement_not_met", "minimum_improvement_not_met"),
+        "task_regression": ("rejected_task_regression", "candidate_rejected_task_regression"),
+        "critical_dimension_regression": (
+            "rejected_critical_dimension_regression",
+            "candidate_rejected_critical_dimension_regression",
+        ),
+        "skill_schema": ("rejected_skill_schema", "candidate_rejected_skill_schema"),
+    }
+    decision, stop_reason = decisions[primary]
+    return {
+        "passed": False,
+        "decision": decision,
+        "stop_reason": stop_reason,
+        "failed_checks": failed_checks,
+        "checks": checks,
+        "summary": f"Candidate failed quality gate: {', '.join(failed_checks)}.",
+    }
+
+
+def _candidate_schema_issues(validation: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not validation:
+        return []
+    issues: list[dict[str, Any]] = []
+    if validation.get("valid") is not True:
+        issues.append({"type": "invalid_schema", "message": "Candidate Skill schema validation is not valid."})
+    missing = validation.get("missing_sections") or []
+    if missing:
+        issues.append({"type": "missing_sections", "sections": missing})
+    unexpected = validation.get("unexpected_sections") or []
+    if unexpected:
+        issues.append({"type": "unexpected_sections", "sections": unexpected})
+    if validation.get("has_title") is False:
+        issues.append({"type": "missing_title", "message": "Candidate Skill is missing a top-level title."})
+    return issues
+
+
+def _task_scores(report: HQSReport) -> dict[str, float]:
+    return {evaluation.task_id: evaluation.average for evaluation in report.per_task}
+
+
+def _dimension_averages(report: HQSReport) -> dict[str, float]:
+    if not report.per_task:
+        return {dimension: 0.0 for dimension in report.dimensions}
+    result: dict[str, float] = {}
+    for dimension in report.dimensions:
+        result[dimension] = round(
+            sum(evaluation.scores.get(dimension, 0.0) for evaluation in report.per_task) / len(report.per_task),
+            2,
+        )
+    return result
+
+
+def _task_regressions(current: dict[str, float], candidate: dict[str, float]) -> list[dict[str, Any]]:
+    regressions = []
+    for task_id, current_score in current.items():
+        candidate_score = candidate.get(task_id)
+        if candidate_score is None:
+            regressions.append(
+                {
+                    "task_id": task_id,
+                    "current": current_score,
+                    "candidate": None,
+                    "delta": None,
+                    "reason": "candidate_missing_task_output",
+                }
+            )
+            continue
+        delta = round(candidate_score - current_score, 2)
+        if delta < -_TASK_REGRESSION_TOLERANCE:
+            regressions.append(
+                {
+                    "task_id": task_id,
+                    "current": current_score,
+                    "candidate": candidate_score,
+                    "delta": delta,
+                }
+            )
+    return regressions
+
+
+def _critical_dimension_regressions(
+    current: dict[str, float],
+    candidate: dict[str, float],
+) -> list[dict[str, Any]]:
+    regressions = []
+    for dimension in _CRITICAL_HQS_DIMENSIONS:
+        current_score = current.get(dimension, 0.0)
+        candidate_score = candidate.get(dimension, 0.0)
+        delta = round(candidate_score - current_score, 2)
+        if delta < -_DIMENSION_REGRESSION_TOLERANCE:
+            regressions.append(
+                {
+                    "dimension": dimension,
+                    "current": current_score,
+                    "candidate": candidate_score,
+                    "delta": delta,
+                }
+            )
+    return regressions
+
+
 def _iteration(
     iteration_number: int,
     skill_path: Path,
@@ -370,6 +530,7 @@ def _iteration(
     candidate_improvement: float | None = None,
     decision: str = "evaluated",
     rewritten_skill: RewrittenSkill | None = None,
+    quality_gate: dict[str, Any] | None = None,
 ) -> EvolutionIteration:
     return EvolutionIteration(
         iteration=iteration_number,
@@ -386,6 +547,7 @@ def _iteration(
         candidate_improvement=candidate_improvement,
         decision=decision,
         rewritten_skill=rewritten_skill,
+        quality_gate=quality_gate,
     )
 
 

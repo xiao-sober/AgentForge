@@ -9,6 +9,17 @@ class ArtifactValidationError(ValueError):
     """Raised when a JSON artifact does not match the local MVP schema."""
 
 
+ALLOWED_TRACE_TYPES = {
+    "skill_generation",
+    "skill_execution",
+    "skill_evaluation",
+    "skill_evolution",
+    "agent_chat",
+    "memory_update",
+    "hqs_diagnosis",
+}
+
+
 @dataclass(frozen=True)
 class ArtifactSchemaResult:
     artifact_type: str
@@ -41,6 +52,11 @@ def validate_json_artifact(path: Path | str, payload: dict[str, Any]) -> Artifac
             _require_type(payload, "output", dict, errors)
             _require_type(payload, "artifacts", list, errors)
             _require_type(payload, "errors", list, errors)
+            if isinstance(payload.get("type"), str) and payload["type"] not in ALLOWED_TRACE_TYPES:
+                errors.append(f"unsupported trace type: {payload['type']}")
+            _validate_trace_steps(payload.get("steps"), errors)
+            _validate_trace_artifacts(payload.get("artifacts"), errors)
+            _validate_trace_errors(payload.get("errors"), errors)
         elif artifact_type == "run_result":
             _require_keys(payload, ["skill", "taskset", "mode", "outputs"], errors)
             _require_type(payload, "skill", dict, errors)
@@ -151,3 +167,46 @@ def _validate_json_values(value: Any, path: str, errors: list[str]) -> None:
             _validate_json_values(item, f"{path}.{key}", errors)
         return
     errors.append(f"{path} contains non-JSON value type {type(value).__name__}")
+
+
+def _validate_trace_steps(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        return
+    for index, step in enumerate(value):
+        if not isinstance(step, dict):
+            errors.append(f"steps[{index}] must be an object")
+            continue
+        if "name" not in step:
+            errors.append(f"steps[{index}] missing required key: name")
+        elif not isinstance(step["name"], str) or not step["name"].strip():
+            errors.append(f"steps[{index}].name must be a non-empty string")
+        if "status" not in step:
+            errors.append(f"steps[{index}] missing required key: status")
+        elif not isinstance(step["status"], str) or not step["status"].strip():
+            errors.append(f"steps[{index}].status must be a non-empty string")
+
+
+def _validate_trace_artifacts(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        return
+    for index, artifact in enumerate(value):
+        if not isinstance(artifact, dict):
+            errors.append(f"artifacts[{index}] must be an object")
+            continue
+        if "type" in artifact and not isinstance(artifact["type"], str):
+            errors.append(f"artifacts[{index}].type must be string when present")
+        if "path" in artifact and not isinstance(artifact["path"], str):
+            errors.append(f"artifacts[{index}].path must be string when present")
+
+
+def _validate_trace_errors(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, list):
+        return
+    for index, error in enumerate(value):
+        if not isinstance(error, dict):
+            errors.append(f"errors[{index}] must be an object")
+            continue
+        if "error_type" in error and not isinstance(error["error_type"], str):
+            errors.append(f"errors[{index}].error_type must be string when present")
+        if "message" in error and not isinstance(error["message"], str):
+            errors.append(f"errors[{index}].message must be string when present")

@@ -132,9 +132,13 @@ def _score_skill(
     query_tokens = set(_tokens(intent.query))
     haystack_tokens = set(_tokens(haystack))
 
-    if intent.skill_hint and intent.skill_hint == skill_slug:
-        score += 4.0
-        reasons.append("skill_hint_match")
+    if intent.skill_hint:
+        if intent.skill_hint == skill_slug:
+            score += 6.0
+            reasons.append("skill_hint_match")
+        else:
+            score -= 1.0
+            reasons.append("skill_hint_mismatch")
     overlap = len(query_tokens & haystack_tokens)
     if overlap:
         score += min(3.0, overlap * 0.35)
@@ -280,7 +284,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 def _tokens(text: str) -> list[str]:
-    normalized = re.sub(r"[^A-Za-z0-9_]+", " ", text.lower())
+    normalized = re.sub(r"[^A-Za-z0-9]+", " ", text.lower().replace("_", " "))
     stopwords = {"the", "and", "for", "with", "this", "that", "from", "into", "about", "please", "skill"}
     return [token for token in normalized.split() if len(token) >= 3 and token not in stopwords]
 

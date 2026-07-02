@@ -5,6 +5,8 @@ from pathlib import Path
 from agentforge.common.artifact_schema import ArtifactValidationError
 from agentforge.common.artifacts import cleanup_artifacts
 from agentforge.common.file_store import write_json
+from agentforge.common.trace import write_trace
+from agentforge.common.trace_inspector import inspect_trace
 
 
 class ArtifactSchemaAndCleanupTest(unittest.TestCase):
@@ -12,6 +14,43 @@ class ArtifactSchemaAndCleanupTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaises(ArtifactValidationError):
                 write_json(Path(temp_dir) / "traces" / "bad.json", {"type": "agent_chat"})
+
+    def test_write_trace_embeds_schema_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            trace_path = write_trace(
+                project_root=root,
+                trace_type="agent_chat",
+                input_data={"message": "hello"},
+                output={},
+                steps=[{"name": "receive_input", "status": "completed"}],
+                artifacts=[],
+                errors=[],
+            )
+
+            summary = inspect_trace(trace_path, project_root=root)
+
+            self.assertTrue(summary["schema"]["valid"])
+            self.assertIsNotNone(summary["embedded_schema"])
+            self.assertTrue(summary["embedded_schema"]["valid"])
+
+    def test_trace_schema_rejects_invalid_step_shape(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            with self.assertRaises(ArtifactValidationError):
+                write_json(
+                    root / "traces" / "bad_step.json",
+                    {
+                        "trace_id": "trace_bad",
+                        "type": "agent_chat",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "input": {},
+                        "steps": [{"status": "completed"}],
+                        "output": {},
+                        "artifacts": [],
+                        "errors": [],
+                    },
+                )
 
     def test_cleanup_artifacts_dry_run_keeps_newest_traces_and_runs(self):
         with tempfile.TemporaryDirectory() as temp_dir:

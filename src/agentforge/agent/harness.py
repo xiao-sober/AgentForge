@@ -91,17 +91,21 @@ class AgentHarness:
         loop.execute(ToolCall("select_skill"))
         loop.execute(ToolCall("build_plan"))
         loop.execute(ToolCall("execute_plan"))
-        loop.execute(ToolCall("observe_execution"))
+        observe_result = loop.execute(ToolCall("observe_execution"))
+        _mark_plan_tool_status(state, "observe_execution", observe_result.status)
         if state["execution"].selected_skill:
-            loop.execute(ToolCall("update_semantic_memory"))
-        loop.execute(ToolCall("build_response"))
+            semantic_result = loop.execute(ToolCall("update_semantic_memory"))
+            _mark_plan_tool_status(state, "update_semantic_memory", semantic_result.status)
+        response_result = loop.execute(ToolCall("build_response"))
+        _mark_plan_tool_status(state, "build_response", response_result.status)
         loop.execute(ToolCall("evaluate_response_hqs"))
         gate = loop.execute(ToolCall("hqs_gate")).output
         if gate.get("decision") == "retry_response" and loop.can_iterate():
             loop.next_iteration()
             state["response_guidance"] = gate
             loop.execute(ToolCall("replan_response"))
-            loop.execute(ToolCall("build_response"))
+            response_result = loop.execute(ToolCall("build_response"))
+            _mark_plan_tool_status(state, "build_response", response_result.status)
             loop.execute(ToolCall("evaluate_response_hqs"))
             loop.execute(ToolCall("hqs_gate"))
         loop.execute(ToolCall("reflect"))
@@ -130,6 +134,8 @@ class AgentHarness:
             "run_id": run.run_id,
             "response": response,
             "response_hqs": response_hqs.to_dict(),
+            "execution_state": execution.execution_state,
+            "plan_step_results": execution.plan_step_results,
             "episode_id": episode["episode_id"],
             "reflection": reflection,
             "reinforcement": reinforcement,
@@ -242,7 +248,7 @@ class AgentHarness:
             errors.extend(execution.errors)
             artifacts.extend(execution.artifacts)
             state["execution"] = execution
-            state["plan"] = _plan_with_status(state["plan"], _plan_status(execution.errors), execution.plan_step_results)
+            state["plan"] = _plan_with_status(state["plan"], "pending", execution.plan_step_results)
             return ToolResult(
                 output={"execution": execution.to_dict()},
                 artifacts=execution.artifacts,
@@ -413,7 +419,7 @@ class AgentHarness:
                 input_schema=ToolSchema.from_types(allow_extra=False),
                 output_schema=ToolSchema.from_types(required={"execution": "object"}),
                 error_specs=[
-                    ToolErrorSpec("ProviderFallback", "Provider failed; local fallback was used.", True),
+                    ToolErrorSpec("LLMProviderError", "Provider execution failed.", False),
                     ToolErrorSpec("SkillExecutionError", "Skill execution failed.", False),
                 ],
                 permission_level="execute",
@@ -539,11 +545,19 @@ class AgentHarness:
         status: str = "completed",
     ) -> None:
         step.complete(output=output, artifacts=artifacts, errors=errors, status=status)
+        run.transition(
+            _manual_step_phase(step.kind),
+            status=status,
+            reason=step.name,
+            details={"step_id": step.step_id, "kind": step.kind},
+        )
         self.memory.add_working_memory(
             {
                 "active_run_id": run.run_id,
                 "active_run_status": run.status,
+                "active_run_phase": run.phase,
                 "active_run_steps": [item.to_dict() for item in run.steps],
+                "active_run_phase_history": run.phase_history,
                 "last_step": step.to_dict(),
                 "updated_at": utc_now_iso(),
             }
@@ -698,6 +712,41 @@ def _plan_status(errors: list[dict[str, Any]]) -> str:
     return "failed" if _has_blocking_error(errors) else "completed"
 
 
+def _mark_plan_tool_status(state: dict[str, Any], tool_name: str, status: str) -> None:
+    plan = state.get("plan")
+    if not isinstance(plan, AgentPlan):
+        return
+    state["plan"] = _plan_with_tool_status(plan, tool_name, status)
+
+
+def _plan_with_tool_status(plan: AgentPlan, tool_name: str, status: str) -> AgentPlan:
+    return AgentPlan(
+        action=plan.action,
+        steps=[
+            PlanStep(
+                step.name,
+                step.action,
+                status=status if step.tool_name == tool_name else step.status,
+                tool_name=step.tool_name,
+                step_id=step.step_id,
+                depends_on=step.depends_on,
+                tool_input=step.tool_input,
+                expected_output=step.expected_output,
+                required=step.required,
+                max_retries=step.max_retries,
+                permission_required=step.permission_required,
+            )
+            for step in plan.steps
+        ],
+        rationale=plan.rationale,
+        objective=plan.objective,
+        complexity=plan.complexity,
+        subtasks=plan.subtasks,
+        stop_conditions=plan.stop_conditions,
+        max_steps=plan.max_steps,
+    )
+
+
 def _plan_with_status(
     plan: AgentPlan,
     status: str,
@@ -714,7 +763,7 @@ def _plan_with_status(
             PlanStep(
                 step.name,
                 step.action,
-                status=result_by_step_id.get(str(step.step_id), status),
+                status=result_by_step_id.get(str(step.step_id), step.status if step.status != "pending" else status),
                 tool_name=step.tool_name,
                 step_id=step.step_id,
                 depends_on=step.depends_on,
@@ -844,3 +893,11 @@ def _relative_or_absolute(path: Path, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
+
+
+def _manual_step_phase(kind: str) -> str:
+    if kind == "reinforcement":
+        return "reinforcing"
+    if kind == "memory":
+        return "memory_updated"
+    return "executing"

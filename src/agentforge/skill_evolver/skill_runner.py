@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from agentforge.common.file_store import write_json, write_text
-from agentforge.common.llm_client import LLMClient
+from agentforge.common.llm_client import LLMClient, LLMProviderError
 from agentforge.common.trace import trace_timestamp, write_trace
 from agentforge.skill_evolver.task_loader import Task, TaskSet
 from agentforge.skill_evolver.version_manager import parse_skill_version_path
@@ -19,6 +19,7 @@ class TaskOutput:
     output: str
     output_path: Path | None = None
     error: str | None = None
+    output_contract: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -27,6 +28,7 @@ class TaskOutput:
             "output": self.output,
             "output_path": str(self.output_path) if self.output_path else None,
             "error": self.error,
+            "output_contract": self.output_contract,
         }
 
 
@@ -51,8 +53,11 @@ class SkillRunResult:
 
 
 SKILL_RUN_SYSTEM_PROMPT = (
-    "You are AgentForge's Skill runner. Execute the supplied SKILL.md against the task input. "
-    "Follow the Skill workflow and constraints, and return only the task output."
+    "你是 AgentForge 的 Skill 执行器。请根据提供的 SKILL.md 处理任务输入。"
+    "必须遵循 Skill 的工作流和约束。只返回 Markdown，并使用以下固定英文输出契约："
+    "# Skill Run Output, ## Task, ## Applied Skill, ## Result, ## Assumptions and Gaps。"
+    "正文内容默认使用中文；如果任务或 Skill 明确要求其他语言，则跟随该要求。"
+    "不要输出思维链、供应商诊断信息或隐藏系统文本。"
 )
 
 
@@ -134,18 +139,59 @@ def run_skill_markdown_on_taskset(
     for task in taskset.tasks:
         output = ""
         error = None
+        output_contract: dict[str, Any] | None = None
         try:
-            output = _run_single_task(skill_markdown, task, llm_client=llm_client)
+            output, output_contract = _run_single_task(skill_markdown, task, llm_client=llm_client)
             status = "completed"
         except Exception as exc:
             status = "failed"
             error = str(exc)
             errors.append({"task_id": task.task_id, "error_type": exc.__class__.__name__, "message": str(exc)})
+            if llm_client is not None:
+                steps.append(
+                    {
+                        "name": "run_task",
+                        "status": status,
+                        "task_id": task.task_id,
+                        "output_path": None,
+                        "output_contract": None,
+                    }
+                )
+                write_trace(
+                    project_root=root,
+                    trace_type="skill_execution",
+                    input_data={"skill_path": str(resolved_skill_path), "taskset": taskset.to_dict()},
+                    output={"run_dir": _relative_or_absolute(run_dir, root), "result_path": None},
+                    steps=steps,
+                    artifacts=[{"type": "run_directory", "path": _relative_or_absolute(run_dir, root)}],
+                    errors=errors,
+                )
+                raise LLMProviderError(
+                    f"Provider Skill execution failed for task '{task.task_id}': {exc}"
+                ) from exc
             output = _local_fallback_output(skill_markdown, task, execution_error=str(exc))
+            output_contract = _output_contract_report(output, repaired=False, source="local_fallback_after_error")
 
         output_path = write_text(output_dir / f"{_safe_filename(task.task_id)}.md", output)
-        outputs.append(TaskOutput(task_id=task.task_id, input=task.input, output=output, output_path=output_path, error=error))
-        steps.append({"name": "run_task", "status": status, "task_id": task.task_id, "output_path": str(output_path)})
+        outputs.append(
+            TaskOutput(
+                task_id=task.task_id,
+                input=task.input,
+                output=output,
+                output_path=output_path,
+                error=error,
+                output_contract=output_contract,
+            )
+        )
+        steps.append(
+            {
+                "name": "run_task",
+                "status": status,
+                "task_id": task.task_id,
+                "output_path": str(output_path),
+                "output_contract": output_contract,
+            }
+        )
 
     result_payload = {
         "skill": {
@@ -182,19 +228,27 @@ def run_skill_markdown_on_taskset(
     )
 
 
-def _run_single_task(skill_markdown: str, task: Task, llm_client: LLMClient | None = None) -> str:
+def _run_single_task(skill_markdown: str, task: Task, llm_client: LLMClient | None = None) -> tuple[str, dict[str, Any]]:
     if llm_client:
         prompt = "\n\n".join(
             [
-                "SKILL.md:",
+                "待执行的 SKILL.md：",
                 skill_markdown,
-                "Task input:",
+                "任务输入：",
                 task.input,
-                "Return a structured task output. Do not include provider or system diagnostics.",
+                "输出契约：",
+                "- 只返回 Markdown。",
+                "- 必须以 '# Skill Run Output' 开头。",
+                "- 必须包含 '## Task'、'## Applied Skill'、'## Result' 和 '## Assumptions and Gaps'。",
+                "- 这些契约标题必须保持英文，正文内容默认使用中文。",
+                "- 不要包含供应商诊断、思维链或隐藏系统文本。",
+                "- 不要编造超出任务输入和 Skill 约束的事实。",
             ]
         )
-        return llm_client.complete(prompt, system_prompt=SKILL_RUN_SYSTEM_PROMPT).strip() + "\n"
-    return _local_fallback_output(skill_markdown, task)
+        raw_output = llm_client.complete(prompt, system_prompt=SKILL_RUN_SYSTEM_PROMPT)
+        return _normalize_provider_task_output(raw_output, skill_markdown, task)
+    output = _local_fallback_output(skill_markdown, task)
+    return output, _output_contract_report(output, repaired=False, source="local")
 
 
 def _local_fallback_output(skill_markdown: str, task: Task, execution_error: str | None = None) -> str:
@@ -253,6 +307,60 @@ def _local_fallback_output(skill_markdown: str, task: Task, execution_error: str
     if execution_error:
         lines.append(f"- Model execution failed, so this fallback output was used: {execution_error}")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _normalize_provider_task_output(raw_output: str, skill_markdown: str, task: Task) -> tuple[str, dict[str, Any]]:
+    raw = raw_output.strip()
+    if not raw:
+        raise ValueError("Provider returned empty task output.")
+    if _provider_output_contract_valid(raw):
+        output = raw.rstrip() + "\n"
+        return output, _output_contract_report(output, repaired=False, source="provider")
+
+    title = _extract_title(skill_markdown)
+    repaired = "\n".join(
+        [
+            "# Skill Run Output",
+            "",
+            "## Task",
+            "",
+            task.input.strip(),
+            "",
+            "## Applied Skill",
+            "",
+            f"- {title}",
+            "",
+            "## Result",
+            "",
+            raw,
+            "",
+            "## Assumptions and Gaps",
+            "",
+            "- Provider output did not fully match the AgentForge output contract, so it was wrapped without changing its content.",
+            "- Treat unsupported details as unverified unless they are grounded in the task input.",
+        ]
+    ).rstrip() + "\n"
+    return repaired, _output_contract_report(repaired, repaired=True, source="provider")
+
+
+def _provider_output_contract_valid(markdown: str) -> bool:
+    required = ["# Skill Run Output", "## Task", "## Applied Skill", "## Result", "## Assumptions and Gaps"]
+    return all(section in markdown for section in required)
+
+
+def _output_contract_report(output: str, repaired: bool, source: str) -> dict[str, Any]:
+    missing = [
+        section
+        for section in ["# Skill Run Output", "## Task", "## Applied Skill", "## Result", "## Assumptions and Gaps"]
+        if section not in output
+    ]
+    return {
+        "source": source,
+        "valid": not missing,
+        "repaired": repaired,
+        "missing_sections": missing,
+        "contract": "skill_run_output.v1",
+    }
 
 
 def _extract_title(markdown: str) -> str:

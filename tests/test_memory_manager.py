@@ -26,12 +26,22 @@ class MemoryManagerTest(unittest.TestCase):
             self.assertTrue(memory.paths.semantic.exists())
 
             self.assertEqual(memory.search_episodes("dashboard")[0]["user_input"], "Review dashboard layout.")
-            self.assertEqual(memory.search_semantic_memory("ui")[0]["key"], "ui_review_skill")
+            episode_result = memory.search_episodes("dashboard")[0]
+            self.assertGreater(episode_result["_memory_score"], 0)
+            self.assertIn("token_overlap", episode_result["_memory_reasons"])
+
+            semantic_result = memory.search_semantic_memory("ui")[0]
+            self.assertEqual(semantic_result["key"], "ui_review_skill")
+            self.assertGreater(semantic_result["_memory_score"], 0)
 
             context = memory.retrieve_context_for_task("Review UI dashboard.")
             self.assertIn("working_memory", context)
+            self.assertIn("retrieval", context)
             self.assertEqual(len(context["episodes"]), 1)
             self.assertEqual(len(context["semantic_memory"]), 1)
+            self.assertEqual(context["retrieval"]["episode_count"], 1)
+            self.assertEqual(context["retrieval"]["semantic_count"], 1)
+            self.assertEqual(context["retrieval"]["episode_scores"][0]["rank"], 1)
 
 
 if __name__ == "__main__":

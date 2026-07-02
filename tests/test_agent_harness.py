@@ -32,12 +32,20 @@ class AgentHarnessTest(unittest.TestCase):
             self.assertEqual(result.intent.intent_type, "run_skill")
             self.assertIsNotNone(result.execution.run_result)
             self.assertIsNotNone(result.execution.selected_skill)
+            self.assertEqual(result.run.phase, "completed")
+            self.assertIn("phase_history", result.run.to_dict())
+            self.assertTrue(any(item["phase"] == "planned" for item in result.run.phase_history))
+            self.assertTrue(any(item["phase"] == "executing" for item in result.run.phase_history))
+            plan_steps = result.plan.to_dict()["steps"]
+            self.assertTrue(plan_steps)
+            self.assertTrue(all(step["status"] == "completed" for step in plan_steps))
             self.assertGreater(result.hqs.average_score, 0)
             self.assertTrue((root / "data" / "memory" / "episodes.jsonl").exists())
 
             trace = json.loads(result.trace_path.read_text(encoding="utf-8"))
             self.assertEqual(trace["type"], "agent_chat")
             self.assertEqual(trace["run"]["run_id"], result.run.run_id)
+            self.assertEqual(trace["run"]["phase"], "completed")
             self.assertEqual(trace["output"]["episode_id"], result.episode["episode_id"])
             self.assertIn("system_hqs", trace["output"])
             self.assertIn("system_hqs", trace)
@@ -56,16 +64,35 @@ class AgentHarnessTest(unittest.TestCase):
             self.assertIn("replan_response", step_names)
             self.assertIn("Quality Gate", result.response)
 
-    def test_provider_generation_failure_falls_back_to_local_generation(self):
+    def test_provider_generation_failure_stops_without_local_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
 
             result = AgentHarness(project_root=root, llm_client=FailingLLMClient()).chat("Please generate Skill for UI review.")
 
-            self.assertIn("Generated Skill", result.response)
-            self.assertIsNotNone(result.execution.generated_skill)
-            self.assertTrue(any(error.get("error_type") == "ProviderFallback" for error in result.execution.errors))
-            self.assertIn("Provider failed", result.response)
+            self.assertIn("could not complete", result.response)
+            self.assertIsNone(result.execution.generated_skill)
+            self.assertEqual(result.execution.execution_state["status"], "failed")
+            self.assertTrue(any(error.get("error_type") == "RuntimeError" for error in result.execution.errors))
+            self.assertEqual(result.stop_reason, "blocking_error")
+
+    def test_generate_and_run_updates_each_plan_step_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            result = AgentHarness(project_root=root).chat(
+                "Review dashboard layout then summarize accessibility risks then propose concrete fixes."
+            )
+
+            self.assertEqual(result.plan.action, "generate_and_run_skill")
+            plan_steps = result.plan.to_dict()["steps"]
+            self.assertGreaterEqual(len(result.execution.plan_step_results), 4)
+            self.assertEqual(result.execution.execution_state["status"], "completed")
+            self.assertGreaterEqual(len(result.execution.run_results), 3)
+            self.assertTrue(all(step["status"] == "completed" for step in plan_steps))
+            self.assertEqual(plan_steps[0]["name"], "generate_skill")
+            self.assertEqual(plan_steps[0]["status"], "completed")
+            self.assertTrue(any(step["name"].startswith("run_skill_subtask") for step in plan_steps))
 
 
 def _write_skill(root: Path) -> Path:

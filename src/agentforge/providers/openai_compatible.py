@@ -55,6 +55,10 @@ class OpenAICompatibleChatClient:
             ) from exc
         except URLError as exc:
             raise LLMProviderError(f"Provider '{self.config.name}' request failed: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise LLMProviderError(
+                f"Provider '{self.config.name}' request timed out after {self.config.timeout_seconds} seconds."
+            ) from exc
         except json.JSONDecodeError as exc:
             raise LLMProviderError(f"Provider '{self.config.name}' returned invalid JSON.") from exc
 

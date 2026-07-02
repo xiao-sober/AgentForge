@@ -9,6 +9,25 @@ from agentforge.common.trace import utc_now_iso
 from agentforge.memory.memory_manager import MemoryManager
 
 
+TOOL_PHASES = {
+    "receive_input": "received",
+    "parse_intent": "parsed",
+    "retrieve_memory_context": "memory_retrieved",
+    "select_skill": "skill_selected",
+    "build_plan": "planned",
+    "execute_plan": "executing",
+    "observe_execution": "observing",
+    "update_semantic_memory": "memory_updated",
+    "build_response": "responding",
+    "evaluate_response_hqs": "evaluating",
+    "hqs_gate": "quality_gated",
+    "replan_response": "planned",
+    "reflect": "reflecting",
+    "reinforcement_check": "reinforcing",
+    "save_episode_memory": "saving_memory",
+}
+
+
 @dataclass
 class AgentRunLoopState:
     phase: str = "initialized"
@@ -70,14 +89,23 @@ class AgentRunLoop:
             errors=result.errors,
             status=result.status,
         )
-        self.state.phase = call.step_name or call.tool_name
+        phase = _phase_for_tool(call.tool_name)
+        self.run.transition(
+            phase,
+            status=result.status,
+            reason=call.tool_name,
+            details={"step_id": step.step_id, "kind": kind},
+        )
+        self.state.phase = phase
         self.state.tool_results.append({"call": call.to_dict(), "result": result.to_dict()})
         self.memory.add_working_memory(
             {
                 "active_run_id": self.run.run_id,
                 "active_run_status": self.run.status,
+                "active_run_phase": self.run.phase,
                 "active_run_loop": self.state.to_dict(),
                 "active_run_steps": [item.to_dict() for item in self.run.steps],
+                "active_run_phase_history": self.run.phase_history,
                 "last_step": step.to_dict(),
                 "updated_at": utc_now_iso(),
             }
@@ -90,3 +118,7 @@ class AgentRunLoop:
     def next_iteration(self) -> int:
         self.state.iteration += 1
         return self.state.iteration
+
+
+def _phase_for_tool(tool_name: str) -> str:
+    return TOOL_PHASES.get(tool_name, "executing")

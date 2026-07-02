@@ -46,6 +46,9 @@ class WebRoutesTest(unittest.TestCase):
             self.assertIn("response", chat.payload)
             self.assertIn("trace_path", chat.payload)
             self.assertIn("trace_url", chat.payload)
+            self.assertIn("execution_state", chat.payload)
+            self.assertIn("plan_step_results", chat.payload)
+            self.assertIn("memory_retrieval", chat.payload)
             self.assertTrue(chat.payload["run_id"].startswith("run_"))
             self.assertEqual(chat.payload["stop_reason"], "completed")
             self.assertIn("triggered", chat.payload["reflection"])
@@ -64,6 +67,11 @@ class WebRoutesTest(unittest.TestCase):
             self.assertIn("execution", debug_chat.payload)
             self.assertIn("run", debug_chat.payload)
             self.assertTrue(debug_chat.payload["run"]["run_id"].startswith("run_"))
+            self.assertIn("trace_url", debug_chat.payload)
+            self.assertIn("execution_state", debug_chat.payload)
+            self.assertIn("plan_step_results", debug_chat.payload)
+            self.assertIn("memory_retrieval", debug_chat.payload)
+            self.assertTrue(debug_chat.payload["trace_url"].startswith("/traces/"))
 
             health = handle_request("GET", "/health", project_root=root)
             self.assertEqual(health.status, 200)
@@ -84,9 +92,12 @@ class WebRoutesTest(unittest.TestCase):
             skill = handle_request("GET", "/skills/ui_review_skill", project_root=root)
             self.assertEqual(skill.status, 200)
 
+            diff_path = root / "skills" / "ui_review_skill" / "v1" / "diff.patch"
+            diff_path.write_text("--- old\n+++ new\n", encoding="utf-8")
             skill_version = handle_request("GET", "/skills/ui_review_skill/v1", project_root=root)
             self.assertEqual(skill_version.status, 200)
             self.assertIn("## Purpose", skill_version.payload["markdown"])
+            self.assertIn("+++ new", skill_version.payload["diff"])
 
             memory = handle_request("GET", "/memory", project_root=root)
             self.assertEqual(memory.status, 200)
@@ -173,7 +184,28 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(chat.status, 200)
             self.assertIn("Provider Skill Output", chat.payload["response"])
 
-    def test_generate_skill_falls_back_when_provider_fails(self):
+    def test_chat_surfaces_provider_task_failure_without_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_skill(root)
+            _write_provider_config(root)
+
+            with patch("agentforge.web.routes.create_llm_client", return_value=FailingProviderLLMClient()):
+                chat = handle_request(
+                    "POST",
+                    "/chat",
+                    body=json.dumps({"message": "Review dashboard layout readability.", "use_provider": True}),
+                    project_root=root,
+                )
+
+            self.assertEqual(chat.status, 200)
+            self.assertEqual(chat.payload["execution_state"]["status"], "failed")
+            self.assertEqual(chat.payload["plan_step_results"][0]["status"], "failed")
+            self.assertEqual(chat.payload["warnings"], [])
+            self.assertEqual(chat.payload["stop_reason"], "blocking_error")
+            self.assertIn("could not complete", chat.payload["response"])
+
+    def test_generate_skill_returns_error_when_provider_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _write_provider_config(root)
@@ -186,9 +218,8 @@ class WebRoutesTest(unittest.TestCase):
                     project_root=root,
                 )
 
-            self.assertEqual(generated.status, 200)
-            self.assertEqual(generated.payload["generation_mode"], "local")
-            self.assertTrue(any(warning["type"] == "ProviderFallback" for warning in generated.payload["warnings"]))
+            self.assertEqual(generated.status, 502)
+            self.assertIn("provider unavailable", generated.payload["error"])
 
     def test_skill_workflow_routes_generate_run_and_evolve(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -241,6 +272,7 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(evolved.status, 200)
             self.assertIn("final_skill_path", evolved.payload)
             self.assertEqual(len(evolved.payload["iterations"]), 1)
+            self.assertIn("quality_gate", evolved.payload["iterations"][0])
 
     def test_chat_rejects_missing_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:

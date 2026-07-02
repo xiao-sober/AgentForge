@@ -33,6 +33,7 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertEqual(config.name, "dashscope")
             self.assertEqual(config.model, "qwen3.6-plus")
             self.assertEqual(config.resolved_api_key(), "sk-test")
+            self.assertEqual(config.timeout_seconds, 60)
             self.assertFalse(config.use_env_proxy)
             self.assertFalse(config.thinking_mode.enabled)
 
@@ -132,6 +133,33 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertEqual(config.thinking_mode.provider, "qwen")
             self.assertEqual(config.thinking_mode.thinking_budget, 500)
             self.assertTrue(config.thinking_mode.preserve_thinking)
+            self.assertEqual(config.timeout_seconds, 180)
+
+    def test_explicit_timeout_overrides_thinking_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "providers.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "default_provider": "dashscope",
+                        "providers": {
+                            "dashscope": {
+                                "type": "openai_compatible",
+                                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                                "api_key": "sk-test",
+                                "model": "qwen3.7-plus",
+                                "timeout_seconds": 240,
+                                "thinking_mode": {"enabled": True},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_provider_config(path)
+
+            self.assertEqual(config.timeout_seconds, 240)
 
     def test_thinking_mode_enabled_must_be_boolean(self):
         with tempfile.TemporaryDirectory() as temp_dir:

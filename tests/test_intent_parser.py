@@ -25,6 +25,19 @@ class IntentParserTest(unittest.TestCase):
         self.assertTrue(intent.requires_skill)
         self.assertEqual(intent.skill_hint, "ui_review_skill")
 
+    def test_trace_url_field_does_not_force_trace_inspection(self):
+        intent = parse_intent("Analyze API JSON output with trace_url, hqs, and warnings.")
+
+        self.assertEqual(intent.intent_type, "run_skill")
+        self.assertTrue(intent.requires_skill)
+        self.assertEqual(intent.skill_hint, "api_design_skill")
+
+    def test_explicit_trace_inspection_still_works(self):
+        intent = parse_intent("Inspect the latest trace.")
+
+        self.assertEqual(intent.intent_type, "inspect_traces")
+        self.assertFalse(intent.requires_skill)
+
     def test_falls_back_to_chat(self):
         intent = parse_intent("hello")
 

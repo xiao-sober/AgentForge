@@ -157,7 +157,6 @@ def main(argv: list[str] | None = None) -> int:
                     model_override=args.model,
                 )
                 llm_client = create_llm_client(provider_config)
-
             result = generate_skill_from_input(input_text, project_root=project_root, llm_client=llm_client)
         except (ProviderConfigError, LLMProviderError, ValueError, OSError) as exc:
             parser.exit(1, f"error: {exc}\n")

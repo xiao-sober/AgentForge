@@ -54,8 +54,10 @@ class RewrittenSkill:
 
 
 SKILL_REWRITE_SYSTEM_PROMPT = (
-    "You are AgentForge's Skill rewriter. Rewrite the supplied SKILL.md into a better version. "
-    "Return only a complete SKILL.md with all required sections."
+    "你是 AgentForge 的 Skill 重写器。请把提供的 SKILL.md 改写为质量更高的下一版。"
+    "只返回一份完整的 SKILL.md，并包含所有必需章节。"
+    "固定章节标题必须保持英文；正文内容默认使用中文，除非原 Skill 明确要求其他语言。"
+    "不要输出解释、代码块、diff、诊断信息或思维链。"
 )
 
 
@@ -253,13 +255,18 @@ def _build_rewrite_prompt(
 ) -> str:
     return "\n\n".join(
         [
-            f"Rewrite this Skill as {next_version}. Keep every required section.",
-            "Current SKILL.md:",
+            f"请将这个 Skill 重写为 {next_version}。必须保留每个必需章节，章节标题保持英文。",
+            "当前 SKILL.md：",
             old_markdown,
-            "Reflection report:",
+            "反思报告：",
             reflection_markdown,
-            "HQS JSON:",
+            "HQS JSON：",
             str(hqs_report.to_dict()),
+            "重写要求：",
+            "- 默认使用中文改写正文内容。",
+            "- 针对低分 HQS 维度补强工作流、约束、质量标准和失败模式。",
+            "- 保留用户可复用的 Skill 语义，不要把某个任务样例写成唯一流程。",
+            "- 不要覆盖旧版本信息，只在 Version Notes 中记录本次版本演进。",
         ]
     )
 

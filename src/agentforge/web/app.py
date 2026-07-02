@@ -29,9 +29,10 @@ def create_server(project_root: Path | str = ".", host: str = "127.0.0.1", port:
                     WebResponse(
                         status=413,
                         payload={"error": str(exc)},
-                        headers={"Content-Type": "application/json; charset=utf-8"},
+                        headers={"Content-Type": "application/json; charset=utf-8", "Connection": "close"},
                     )
                 )
+                self.close_connection = True
                 return
             response = handle_request(self.command, self.path, body=body, project_root=root)
             self._send_response(response)
@@ -45,8 +46,17 @@ def create_server(project_root: Path | str = ".", host: str = "127.0.0.1", port:
             except ValueError as exc:
                 raise ValueError("Content-Length must be an integer.") from exc
             if byte_count > MAX_REQUEST_BODY_BYTES:
+                self._discard_request_body(byte_count)
                 raise ValueError(f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes.")
             return self.rfile.read(byte_count)
+
+        def _discard_request_body(self, byte_count: int) -> None:
+            remaining = min(byte_count, MAX_REQUEST_BODY_BYTES + 1)
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 64 * 1024))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
 
         def _send_response(self, response: WebResponse) -> None:
             body = response.body()

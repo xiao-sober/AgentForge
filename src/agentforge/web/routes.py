@@ -109,10 +109,10 @@ def _chat(
     active_harness = harness or AgentHarness(project_root=root, llm_client=provider_selection.client)
     result = active_harness.chat(message)
     if _wants_debug(payload, query or {}):
-        response_payload = result.to_dict()
+        response_payload = _debug_chat_payload(result)
         if provider_selection.warnings:
             response_payload["provider_warnings"] = provider_selection.warnings
-        return _json(200, response_payload)
+        return _json(200, _with_provider_warnings(response_payload, provider_selection.warnings))
     return _json(200, _with_provider_warnings(_compact_chat_payload(result), provider_selection.warnings))
 
 
@@ -120,14 +120,7 @@ def _generate_skill(body: bytes | str | None, root: Path) -> WebResponse:
     payload = _decode_json_body(body)
     input_text = _required_string(payload, "input")
     provider_selection = _optional_llm_client(payload, root)
-    warnings = list(provider_selection.warnings)
-    try:
-        result = generate_skill_from_input(input_text, project_root=root, llm_client=provider_selection.client)
-    except Exception as exc:
-        if provider_selection.client is None:
-            raise
-        warnings.append(_provider_warning("ProviderFallback", f"Provider failed, so local Skill generation was used: {exc}"))
-        result = generate_skill_from_input(input_text, project_root=root, llm_client=None)
+    result = generate_skill_from_input(input_text, project_root=root, llm_client=provider_selection.client)
     response = {
         "skill_slug": result.requirement.skill_slug,
         "skill_name": result.requirement.skill_name,
@@ -139,7 +132,7 @@ def _generate_skill(body: bytes | str | None, root: Path) -> WebResponse:
         "valid": result.validation_result.valid,
         "missing_sections": result.validation_result.missing_sections,
         "generation_mode": result.generation_mode,
-        "warnings": warnings,
+        "warnings": provider_selection.warnings,
     }
     return _json(200, response)
 
@@ -196,6 +189,7 @@ def _evolve_skill(body: bytes | str | None, root: Path) -> WebResponse:
                 else None,
                 "candidate_improvement": iteration.candidate_improvement,
                 "decision": iteration.decision,
+                "quality_gate": iteration.quality_gate,
                 "rewritten_skill_path": str(iteration.rewritten_skill.skill_path) if iteration.rewritten_skill else None,
                 "run_dir": str(iteration.run_result.run_dir),
             }
@@ -285,6 +279,7 @@ def _skill_version(root: Path, skill_name: str, version: str) -> WebResponse:
         return _json(404, {"error": f"Skill version not found: {skill_name}/{version}"})
     metadata_path = skill_path.parent / "metadata.json"
     metadata = _read_json(metadata_path) if metadata_path.exists() else None
+    diff_text = _read_skill_diff(skill_path, metadata, root)
     return _json(
         200,
         {
@@ -294,6 +289,7 @@ def _skill_version(root: Path, skill_name: str, version: str) -> WebResponse:
             "source": "sample" if "examples" in skill_path.parts else "local",
             "markdown": skill_path.read_text(encoding="utf-8"),
             "metadata": metadata,
+            "diff": diff_text,
         },
     )
 
@@ -304,6 +300,26 @@ def _find_skill_version_path(root: Path, skill_name: str, version: str) -> Path:
         if skill_path.exists():
             return skill_path
     return root / "skills" / skill_name / version / "SKILL.md"
+
+
+def _read_skill_diff(skill_path: Path, metadata: dict[str, Any] | None, root: Path) -> str | None:
+    candidates = [skill_path.parent / "diff.patch"]
+    if isinstance(metadata, dict) and isinstance(metadata.get("diff_path"), str):
+        try:
+            candidates.append(
+                _resolve_under_roots(
+                    root,
+                    Path(str(metadata["diff_path"])),
+                    [root / "skills", root / "examples" / "skills"],
+                    "Diff path must stay under skills/ or examples/skills/.",
+                )
+            )
+        except ValueError:
+            pass
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    return None
 
 
 def _memory(root: Path) -> WebResponse:
@@ -423,8 +439,7 @@ def _optional_llm_client(payload: dict[str, Any], root: Path) -> ProviderClientS
         config = load_provider_config(config_path)
         return ProviderClientSelection(client=create_llm_client(config), warnings=warnings)
     except ProviderConfigError as exc:
-        warnings.append(_provider_warning("ProviderConfigFallback", f"Provider config failed, so local mode was used: {exc}"))
-        return ProviderClientSelection(client=None, warnings=warnings)
+        raise ProviderConfigError(f"Provider config failed: {exc}") from exc
 
 
 def _resolve_skill_path(payload: dict[str, Any], root: Path) -> Path:
@@ -477,13 +492,10 @@ def _resolve_under_roots(root: Path, path: Path, allowed_roots: list[Path], mess
 def _compact_chat_payload(result: Any) -> dict[str, Any]:
     execution = result.execution
     selected = execution.selected_skill or result.selected_skill
-    trace_file = Path(result.trace_path).name
     return {
         "run_id": result.run.run_id,
         "response": result.response,
         "trace_path": str(result.trace_path),
-        "trace_file": trace_file,
-        "trace_url": f"/traces/{trace_file}",
         "hqs": result.hqs.to_dict(),
         "system_hqs": result.system_hqs.to_dict(),
         "intent": {
@@ -496,6 +508,29 @@ def _compact_chat_payload(result: Any) -> dict[str, Any]:
             "steps": _completed_plan_steps(result.plan.to_dict().get("steps", [])),
         },
         "selected_skill": _compact_skill(selected),
+        "reinforcement": result.reinforcement,
+        "reflection": result.reflection,
+        "stop_reason": result.stop_reason,
+        "debug_url_hint": "POST /chat with {\"debug\": true} or use /chat?debug=1 for full payload.",
+        **_chat_observable_fields(result),
+    }
+
+
+def _debug_chat_payload(result: Any) -> dict[str, Any]:
+    payload = result.to_dict()
+    payload.update(_chat_observable_fields(result))
+    return payload
+
+
+def _chat_observable_fields(result: Any) -> dict[str, Any]:
+    execution = result.execution
+    trace_file = Path(result.trace_path).name
+    return {
+        "trace_file": trace_file,
+        "trace_url": _trace_url(result.trace_path),
+        "execution_state": execution.execution_state,
+        "plan_step_results": execution.plan_step_results,
+        "memory_retrieval": result.memory_context.get("retrieval") if isinstance(result.memory_context, dict) else None,
         "artifacts": execution.artifacts,
         "warnings": [
             {
@@ -505,16 +540,12 @@ def _compact_chat_payload(result: Any) -> dict[str, Any]:
             for error in execution.errors
             if error.get("recoverable")
         ],
-        "reinforcement": result.reinforcement,
-        "reflection": result.reflection,
-        "stop_reason": result.stop_reason,
         "timeline": _compact_timeline(result.run.to_dict().get("steps", [])),
-        "debug_url_hint": "POST /chat with {\"debug\": true} or use /chat?debug=1 for full payload.",
     }
 
 
 def _completed_plan_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{**step, "status": "completed"} for step in steps]
+    return steps
 
 
 def _compact_skill(skill: Any) -> dict[str, Any] | None:

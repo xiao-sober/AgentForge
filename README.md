@@ -18,7 +18,7 @@ It is designed for transparent local development: Skills are files, runs are ins
 
 ## Status
 
-Current status: MVP with production-hardening basics.
+Current status: observable Harness Agent MVP with production-hardening basics.
 
 Implemented:
 
@@ -26,11 +26,13 @@ Implemented:
 - Skill execution
 - Skill evolution
 - Agent harness run loop with local ToolRegistry
-- JSON Web/API MVP
-- Local memory
+- State-driven Planner/Executor for multi-step Skill execution
+- JSON Web/API MVP and local Web workbench
+- Local memory with retrieval scores and match reasons
 - Skill, response, and system HQS
-- Trace inspection
-- Provider fallback
+- Skill evolution quality gate
+- Trace schema validation and inspection
+- Provider output normalization and fail-fast provider errors
 - Artifact retention cleanup
 - Sample Skill and task set
 
@@ -86,9 +88,11 @@ The console supports:
 - Run Skill
 - Evolve Skill
 - Model-call toggle using the default provider config
-- English/Chinese UI switching
+- Chinese UI by default, with English/Chinese switching
 - Agent run timeline
-- Trace/debug inspection
+- Trace, HQS, memory retrieval, and Skill diff drill-down views
+- Artifact and warning panels
+- Trace/debug JSON inspection
 
 Check local health and config:
 
@@ -165,13 +169,19 @@ GET  /hqs
 - `system_hqs`
 - `intent`
 - `plan`
+- `execution_state`
+- `plan_step_results`
+- `memory_retrieval`
 - `selected_skill`
+- `artifacts`
 - `timeline`
 - `reflection`
 - `stop_reason`
 - `reinforcement`
 
-By default, `/chat` returns a compact payload for UI use. Send `{"debug": true}` or call `/chat?debug=1` to receive the full execution payload, including the full `run` object and per-step inputs/outputs.
+By default, `/chat` returns a compact payload for UI use. Send `{"debug": true}` or call `/chat?debug=1` to receive the full execution payload, including the full `run` object, execution result, memory context, and per-step inputs/outputs.
+
+`GET /skills/<skillName>/<version>` returns the Skill Markdown, metadata, and `diff.patch` text when the version has an evolution diff.
 
 `POST /chat`, `POST /skills/generate`, `POST /skills/run`, and `POST /skills/evolve` accept `use_provider: true` when you want to call the default configured model provider.
 
@@ -225,8 +235,8 @@ Example shape:
       "type": "openai_compatible",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_key": "your-api-key",
-      "model": "qwen3.6-plus",
-      "timeout_seconds": 60,
+      "model": "qwen3.7-plus",
+      "timeout_seconds": 180,
       "temperature": 0.2,
       "max_tokens": 2500
     }
@@ -234,7 +244,25 @@ Example shape:
 }
 ```
 
-If a provider fails during Agent Skill generation or execution, the Agent harness records a recoverable error and falls back to deterministic local behavior where possible.
+If a provider is explicitly enabled and the model call times out or fails, AgentForge stops that provider-backed action and records the failure. It does not silently switch to deterministic local execution. Use `--local-only` or omit `--use-provider` when you intentionally want deterministic local behavior.
+
+When `thinking_mode.enabled` is true and `timeout_seconds` is omitted, AgentForge defaults the provider timeout to 180 seconds. Non-thinking providers still default to 60 seconds.
+
+Provider-backed Skill runs must satisfy the AgentForge output contract:
+
+```md
+# Skill Run Output
+
+## Task
+
+## Applied Skill
+
+## Result
+
+## Assumptions and Gaps
+```
+
+When provider output is non-empty but does not match the contract, AgentForge wraps it in the required structure without discarding the raw content. The output contract report is stored with each task output.
 
 ## Core Concepts
 
@@ -268,6 +296,7 @@ Each `/chat` request creates an `AgentRun` with:
 - `run_id`
 - step timeline
 - registered tool calls
+- phase history
 - response-level HQS
 - HQS gate decision
 - reflection recommendation
@@ -277,9 +306,34 @@ Typical steps include intent parsing, memory retrieval, Skill selection, plannin
 
 The harness uses a local `ToolRegistry` and `AgentRunLoop` to execute steps. Each registered tool declares input schema, output schema, known error types, permission level, idempotency, and optional timeout metadata. Tool inputs and outputs are validated before they are recorded in the run timeline.
 
-Planner v2 decomposes complex Skill tasks into ordered subtasks with dependencies, expected outputs, tool inputs, and stop conditions. When a selected Skill is run against a complex task, the executor builds a local task set and runs each subtask through the Phase 2 Skill runner.
+**Planner and Executor**
+
+Planner v2 decomposes complex Skill tasks into ordered subtasks with:
+
+- stable `step_id`
+- `depends_on`
+- `tool_input`
+- expected output metadata
+- required/optional step flags
+- max retry metadata
+- stop conditions
+
+The Executor is state-driven. It advances executable plan steps from `pending` to `running`, then to `completed`, `completed_with_warnings`, `failed`, or `skipped`. Dependency failures propagate to dependent steps as `skipped`. Provider-backed failures are blocking errors; local deterministic mode remains available only when selected intentionally. Multi-step Skill tasks are run as separate Skill executions, so the final execution result can contain both the compatibility `run_result` and the full `run_results` list.
+
+Execution state is exposed as:
+
+- `execution_state.status`
+- `execution_state.step_statuses`
+- `execution_state.completed_steps`
+- `execution_state.failed_steps`
+- `execution_state.skipped_steps`
+- `execution_state.transitions`
+
+The `agent_chat` trace also records the execution state and plan step results for inspection.
 
 If the response HQS gate is triggered, the loop records a `replan_response` step, rebuilds the response once, evaluates HQS again, then moves to reflection or reinforcement. Reinforcement only runs when an explicit task set is configured. It is bounded by `max_iterations`, writes a Skill evolution trace, rejects regressions through the existing HQS gate, and writes the reinforcement result back to semantic memory.
+
+Skill evolution also applies a candidate quality gate. A rewritten Skill can be rejected when it regresses average HQS, fails minimum improvement, worsens a task score, or regresses critical dimensions such as task completion, instruction following, output structure, or risk control.
 
 **HQS**
 
@@ -290,6 +344,8 @@ AgentForge currently supports:
 - Skill-level HQS
 - Response-level HQS
 - System-level HQS
+
+Response HQS includes calibration, confidence, memory usefulness, and generic-output penalties. System HQS scores tool reliability, memory retrieval quality, Skill selection accuracy, trace completeness, recovery ability, and user experience.
 
 **Memory**
 
@@ -303,6 +359,37 @@ data/memory/
 ```
 
 `data/` is ignored by git.
+
+Retrieval returns ranked episodic and semantic memories with:
+
+- `_memory_rank`
+- `_memory_score`
+- `_memory_reasons`
+- `_memory_matched_tokens`
+
+`retrieve_context_for_task()` also returns a compact `retrieval` summary used by traces and the Web workbench.
+
+## Web Workbench
+
+The local Web workbench is served from the standard-library HTTP server and uses static HTML/CSS/JS.
+
+Main panels:
+
+- Chat
+- Generate Skill
+- Run Skill
+- Evolve Skill
+
+Inspection panels:
+
+- HQS score bars and dimensions
+- Run metadata
+- Warnings
+- Artifacts
+- Timeline
+- Drill-down tabs for Trace, HQS, Memory, and Skill Diff
+
+The Trace drill-down fetches the latest trace JSON and shows trace type, schema, execution state, trace steps, artifacts, and errors. The HQS drill-down shows response and system dimensions. The Memory drill-down shows retrieval scores, reasons, recent episodes, and semantic memory. The Skill Diff drill-down reads the current Skill version and displays `diff.patch` when present.
 
 ## Skill Format
 
@@ -400,6 +487,8 @@ JSON artifacts pass lightweight schema checks before writing. The validator chec
 - memory JSON
 
 This is intentionally small and dependency-free.
+
+Trace validation checks supported trace types, required top-level fields, step records, artifact records, and error records. Traces embed schema metadata so inspection tools and the Web workbench can display the schema version used at write time.
 
 ## Project Layout
 

@@ -21,6 +21,8 @@ class ResponseHQSReport:
     average_score: float
     rationale: dict[str, str]
     recommendation: str
+    confidence: float
+    calibration: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -29,6 +31,8 @@ class ResponseHQSReport:
             "average_score": self.average_score,
             "rationale": self.rationale,
             "recommendation": self.recommendation,
+            "confidence": self.confidence,
+            "calibration": self.calibration,
         }
 
 
@@ -39,6 +43,7 @@ def evaluate_response(
     intent: dict[str, Any] | None = None,
 ) -> ResponseHQSReport:
     response_text = response.strip()
+    calibration = _calibration(user_input, response_text, memory_context)
     scores = {
         "Intent Satisfaction": _score_intent_satisfaction(user_input, response_text, intent),
         "Instruction Following": _score_instruction_following(response_text),
@@ -55,6 +60,8 @@ def evaluate_response(
         average_score=average,
         rationale=rationale,
         recommendation=_recommendation(average, scores),
+        confidence=_confidence(calibration),
+        calibration=calibration,
     )
 
 
@@ -68,6 +75,7 @@ def _score_intent_satisfaction(user_input: str, response: str, intent: dict[str,
         score += 0.75
     if intent and str(intent.get("intent_type", "")) in response.lower():
         score += 0.25
+    score -= _generic_response_penalty(response) * 0.5
     return _clamp(score)
 
 
@@ -97,6 +105,7 @@ def _score_completeness(response: str) -> float:
         score += 0.75
     if any(word in response.lower() for word in ["next", "artifact", "trace", "assumption"]):
         score += 0.5
+    score -= _generic_response_penalty(response) * 0.35
     return _clamp(score)
 
 
@@ -110,6 +119,9 @@ def _score_specificity(user_input: str, response: str) -> float:
         score += 0.75
     if any(word in response.lower() for word in ["because", "specific", "selected", "generated", "path"]):
         score += 0.75
+    if _overlap_ratio(user_input, response) < 0.08:
+        score -= 0.75
+    score -= _generic_response_penalty(response)
     return _clamp(score)
 
 
@@ -147,6 +159,46 @@ def _overlap_ratio(source: str, target: str) -> float:
         return 0.0
     target_tokens = set(_tokens(target))
     return len(source_tokens & target_tokens) / len(source_tokens)
+
+
+def _calibration(user_input: str, response: str, memory_context: dict[str, Any] | None) -> dict[str, Any]:
+    source_tokens = set(_tokens(user_input))
+    response_tokens = set(_tokens(response))
+    matched = sorted(source_tokens & response_tokens)
+    generic_penalty = _generic_response_penalty(response)
+    return {
+        "evidence_overlap_ratio": _overlap_ratio(user_input, response),
+        "matched_input_tokens": matched[:20],
+        "generic_penalty": generic_penalty,
+        "has_memory_context": bool(memory_context and (memory_context.get("episodes") or memory_context.get("semantic_memory"))),
+    }
+
+
+def _confidence(calibration: dict[str, Any]) -> float:
+    overlap = float(calibration.get("evidence_overlap_ratio", 0.0) or 0.0)
+    penalty = float(calibration.get("generic_penalty", 0.0) or 0.0)
+    score = 0.45 + min(0.35, overlap) - min(0.25, penalty * 0.12)
+    if calibration.get("has_memory_context"):
+        score += 0.05
+    return round(max(0.0, min(1.0, score)), 2)
+
+
+def _generic_response_penalty(response: str) -> float:
+    lowered = response.lower()
+    generic_phrases = [
+        "follow the skill workflow",
+        "return a structured",
+        "structured task output",
+        "specific enough to act on",
+        "actionable output",
+        "recommended approach",
+        "local deterministic run",
+        "completed the local agent loop",
+    ]
+    hits = sum(1 for phrase in generic_phrases if phrase in lowered)
+    if hits == 0:
+        return 0.0
+    return round(min(1.25, hits * 0.35), 2)
 
 
 def _tokens(text: str) -> list[str]:

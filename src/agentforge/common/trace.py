@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from agentforge.common.artifact_schema import validate_json_artifact
 from agentforge.common.file_store import write_json
 
 
@@ -27,6 +28,7 @@ def write_trace(
     extra_fields: dict[str, Any] | None = None,
 ) -> Path:
     trace_id = f"trace_{uuid4().hex}"
+    trace_path = project_root / "traces" / f"{trace_timestamp()}_{trace_type}.json"
     payload: dict[str, Any] = {
         "trace_id": trace_id,
         "type": trace_type,
@@ -39,6 +41,6 @@ def write_trace(
     }
     if extra_fields:
         payload.update(extra_fields)
+    payload["schema"] = validate_json_artifact(trace_path, payload).to_dict()
 
-    trace_path = project_root / "traces" / f"{trace_timestamp()}_{trace_type}.json"
     return write_json(trace_path, payload)

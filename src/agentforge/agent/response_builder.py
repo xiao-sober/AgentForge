@@ -46,8 +46,8 @@ def build_response(
 
     if execution.run_result:
         skill_path = _relative_or_absolute(execution.run_result.skill_path, root)
-        run_dir = _relative_or_absolute(execution.run_result.run_dir, root)
-        trace_path = _relative_or_absolute(execution.run_result.trace_path, root)
+        run_count = len(execution.run_results) if execution.run_results else 1
+        run_lines = _run_artifact_lines(execution, root)
         return "\n".join(
             [
                 "# AgentForge Response",
@@ -59,8 +59,8 @@ def build_response(
                 "## Agent Artifacts",
                 "",
                 f"- Selected Skill: {skill_path}",
-                f"- Run directory: {run_dir}",
-                f"- Execution trace: {trace_path}",
+                f"- Skill runs: {run_count}",
+                *run_lines,
                 f"- Execution mode: {execution.run_result.mode}",
                 *_warning_lines(execution),
                 "",
@@ -167,6 +167,20 @@ def _memory_line(memory_context: dict[str, Any]) -> str:
     episodes = len(memory_context.get("episodes") or [])
     semantic = len(memory_context.get("semantic_memory") or [])
     return f"- Retrieved context: {episodes} episode memories and {semantic} semantic memories."
+
+
+def _run_artifact_lines(execution: ExecutionResult, root: Path) -> list[str]:
+    run_results = execution.run_results or ([execution.run_result] if execution.run_result else [])
+    if len(run_results) <= 1:
+        run_result = run_results[0]
+        return [
+            f"- Run directory: {_relative_or_absolute(run_result.run_dir, root)}",
+            f"- Execution trace: {_relative_or_absolute(run_result.trace_path, root)}",
+        ]
+    return [
+        f"- Run {index}: {_relative_or_absolute(run_result.run_dir, root)}"
+        for index, run_result in enumerate(run_results, start=1)
+    ]
 
 
 def _relative_or_absolute(path: Path, root: Path) -> str:

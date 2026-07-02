@@ -69,7 +69,7 @@ def parse_intent(user_input: str) -> Intent:
             reasons=["inspect_skills"],
         )
 
-    if _contains_any(lowered, ["trace", "traces"]) or _contains_any(query, ["trace", "日志", "轨迹"]):
+    if _is_trace_inspection_request(lowered, query):
         return Intent(
             intent_type="inspect_traces",
             query=query,
@@ -118,13 +118,29 @@ def parse_intent(user_input: str) -> Intent:
 
 
 def _detect_skill_hint(lowered: str) -> str | None:
-    if "ui" in lowered or "ux" in lowered or "dashboard" in lowered or "screenshot" in lowered:
-        return "ui_review_skill"
-    if "api" in lowered or "endpoint" in lowered:
+    tokens = set(_tokens(lowered))
+    api_terms = {"api", "endpoint", "json", "schema", "contract", "response"}
+    ui_terms = {"ui", "ux", "dashboard", "screenshot", "layout", "screen", "page"}
+    if tokens & api_terms:
         return "api_design_skill"
-    if "test" in lowered or "pytest" in lowered or "unit test" in lowered:
+    if tokens & ui_terms or "user interface" in lowered:
+        return "ui_review_skill"
+    if tokens & {"test", "pytest"} or "unit test" in lowered:
         return "testing_skill"
     return None
+
+
+def _is_trace_inspection_request(lowered: str, original: str) -> bool:
+    normalized = lowered.replace("_", " ")
+    if re.search(r"\b(list|show|inspect|view|open|read|find)\s+(the\s+)?(latest\s+)?traces?\b", normalized):
+        return True
+    if re.search(r"\btraces?\s+(list|viewer|detail|details|inspection|summary)\b", normalized):
+        return True
+    if re.fullmatch(r"\s*traces?\s*", normalized):
+        return True
+    if re.search(r"\btrace\s+[A-Za-z0-9_.-]+\.json\b", normalized):
+        return True
+    return _contains_any(original, ["查看 trace", "打开 trace", "查看日志", "查看轨迹"])
 
 
 def _matches_chinese_skill_generation(text: str) -> bool:
@@ -133,3 +149,7 @@ def _matches_chinese_skill_generation(text: str) -> bool:
 
 def _contains_any(text: str, needles: list[str]) -> bool:
     return any(needle in text for needle in needles)
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_]+", text.lower())

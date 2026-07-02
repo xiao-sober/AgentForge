@@ -13,13 +13,13 @@ def create_unified_diff(
     new_label: str,
 ) -> str:
     lines = difflib.unified_diff(
-        old_markdown.splitlines(keepends=True),
-        new_markdown.splitlines(keepends=True),
+        old_markdown.splitlines(),
+        new_markdown.splitlines(),
         fromfile=old_label,
         tofile=new_label,
         lineterm="",
     )
-    diff = "".join(lines)
+    diff = "\n".join(lines)
     return diff if diff.endswith("\n") else diff + "\n"
 
 

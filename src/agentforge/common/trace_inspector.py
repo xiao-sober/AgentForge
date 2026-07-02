@@ -27,6 +27,7 @@ def inspect_trace(path_or_name: Path | str, project_root: Path | str = ".") -> d
     return {
         "path": str(trace_path),
         "schema": schema.to_dict(),
+        "embedded_schema": payload.get("schema") if isinstance(payload.get("schema"), dict) else None,
         "trace_id": payload.get("trace_id"),
         "type": payload.get("type"),
         "created_at": payload.get("created_at"),
