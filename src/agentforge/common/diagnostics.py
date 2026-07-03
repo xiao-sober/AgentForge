@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import agentforge
-from agentforge.providers import ProviderConfigError, load_provider_config
+from agentforge.providers import ProviderConfigError, create_llm_client, load_provider_config
 
 
 def build_version_report(project_root: Path | str = ".") -> dict[str, Any]:
@@ -63,7 +63,7 @@ def build_config_report(project_root: Path | str = ".", provider_config: Path | 
 
     try:
         selected = load_provider_config(config_path)
-        report["selected_provider"] = selected.metadata()
+        report["selected_provider"] = create_llm_client(selected).metadata()
     except ProviderConfigError as exc:
         report["errors"].append(str(exc))
 

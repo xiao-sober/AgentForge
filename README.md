@@ -211,6 +211,32 @@ agentforge cleanup-artifacts
 
 Use `--help` on any command for arguments.
 
+### CLI Input on Windows and Linux
+
+For short ASCII input, `--input` is fine. For Chinese text, multiline prompts, or complex JSON, prefer `--input-file` or `--stdin`.
+
+Windows PowerShell is fragile with quoted JSON and may write UTF-8 files with BOM. AgentForge task set loading accepts UTF-8 BOM, but stdin still depends on the console encoding. Use UTF-8 before piping Chinese text:
+
+```powershell
+$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+$env:PYTHONUTF8 = "1"
+
+Get-Content -Raw -Encoding UTF8 .\requirement.txt |
+  python -m agentforge generate-skill --stdin --local-only
+
+Get-Content -Raw -Encoding UTF8 .\tasksets\api_review.json |
+  python -m agentforge evolve-skill --skill .\skills\api_design_skill\v1\SKILL.md --stdin --max-iterations 1
+```
+
+Linux and macOS shells usually handle UTF-8 and single-quoted JSON more predictably, but stdin is still the safest option for large input:
+
+```bash
+python -m agentforge generate-skill --stdin --local-only < requirement.txt
+python -m agentforge evolve-skill --skill skills/api_design_skill/v1/SKILL.md --stdin --max-iterations 1 < tasksets/api_review.json
+```
+
+`generate-skill --stdin` reads requirement text, `run-skill --stdin` reads one task input, and `evolve-skill --stdin` reads a JSON task set. Use `--taskset-format yaml` only when PyYAML is installed.
+
 ## Model Providers
 
 Provider config is optional. Without it, AgentForge uses deterministic local generation and execution.
@@ -239,6 +265,20 @@ Example shape:
       "timeout_seconds": 180,
       "temperature": 0.2,
       "max_tokens": 2500
+    },
+    "deepseek_v4_pro": {
+      "type": "openai_compatible",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-pro",
+      "timeout_seconds": 300,
+      "temperature": 0.2,
+      "max_tokens": 8192,
+      "thinking_mode": {
+        "enabled": true,
+        "provider": "deepseek",
+        "reasoning_effort": "high"
+      }
     }
   }
 }
@@ -246,7 +286,7 @@ Example shape:
 
 If a provider is explicitly enabled and the model call times out or fails, AgentForge stops that provider-backed action and records the failure. It does not silently switch to deterministic local execution. Use `--local-only` or omit `--use-provider` when you intentionally want deterministic local behavior.
 
-When `thinking_mode.enabled` is true and `timeout_seconds` is omitted, AgentForge defaults the provider timeout to 180 seconds. Non-thinking providers still default to 60 seconds.
+When `thinking_mode.enabled` is true and `timeout_seconds` is omitted, AgentForge defaults the provider timeout to 180 seconds. Non-thinking providers still default to 60 seconds. DeepSeek V4 uses the official `https://api.deepseek.com` base URL and `deepseek-v4-pro` model ID; AgentForge sends DeepSeek thinking mode with `thinking: {"type": "enabled"}` and optional `reasoning_effort`.
 
 Provider-backed Skill runs must satisfy the AgentForge output contract:
 

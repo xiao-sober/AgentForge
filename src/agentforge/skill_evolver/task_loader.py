@@ -48,11 +48,16 @@ def load_taskset(path: Path | str) -> TaskSet:
     return _parse_taskset_payload(payload, taskset_path)
 
 
+def load_taskset_from_text(text: str, source_path: str = "<stdin>", file_format: str = "json") -> TaskSet:
+    payload = _load_payload_from_text(text, source_path=source_path, file_format=file_format)
+    return _parse_taskset_payload(payload, Path(source_path))
+
+
 def _load_payload(path: Path) -> Any:
     suffix = path.suffix.lower()
     if suffix == ".json":
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as exc:
             raise ValueError(f"Task set is not valid JSON: {path}") from exc
 
@@ -61,9 +66,25 @@ def _load_payload(path: Path) -> Any:
             import yaml  # type: ignore[import-not-found]
         except ImportError as exc:
             raise ValueError("YAML task sets require PyYAML. Use JSON for the local MVP.") from exc
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
+        return yaml.safe_load(path.read_text(encoding="utf-8-sig"))
 
     raise ValueError(f"Unsupported task set format '{path.suffix}'. Use .json, .yaml, or .yml.")
+
+
+def _load_payload_from_text(text: str, source_path: str, file_format: str) -> Any:
+    normalized_format = file_format.lower().lstrip(".")
+    if normalized_format == "json":
+        try:
+            return json.loads(text.lstrip("\ufeff"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Task set is not valid JSON: {source_path}") from exc
+    if normalized_format in {"yaml", "yml"}:
+        try:
+            import yaml  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ValueError("YAML task sets require PyYAML. Use JSON for the local MVP.") from exc
+        return yaml.safe_load(text.lstrip("\ufeff"))
+    raise ValueError(f"Unsupported task set format '{file_format}'. Use json, yaml, or yml.")
 
 
 def _parse_taskset_payload(payload: Any, path: Path) -> TaskSet:

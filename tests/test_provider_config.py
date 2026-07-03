@@ -135,6 +135,27 @@ class ProviderConfigTest(unittest.TestCase):
             self.assertTrue(config.thinking_mode.preserve_thinking)
             self.assertEqual(config.timeout_seconds, 180)
 
+    def test_loads_deepseek_v4_pro_example_config(self):
+        old_value = os.environ.get("DEEPSEEK_API_KEY")
+        os.environ["DEEPSEEK_API_KEY"] = "sk-deepseek-test"
+        try:
+            path = Path(__file__).resolve().parents[1] / "config" / "providers.example.json"
+
+            config = load_provider_config(path, provider_name="deepseek_v4_pro")
+
+            self.assertEqual(config.base_url, "https://api.deepseek.com")
+            self.assertEqual(config.model, "deepseek-v4-pro")
+            self.assertEqual(config.resolved_api_key(), "sk-deepseek-test")
+            self.assertEqual(config.timeout_seconds, 300)
+            self.assertTrue(config.thinking_mode.enabled)
+            self.assertEqual(config.thinking_mode.provider, "deepseek")
+            self.assertEqual(config.thinking_mode.reasoning_effort, "high")
+        finally:
+            if old_value is None:
+                os.environ.pop("DEEPSEEK_API_KEY", None)
+            else:
+                os.environ["DEEPSEEK_API_KEY"] = old_value
+
     def test_explicit_timeout_overrides_thinking_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "providers.json"

@@ -82,7 +82,7 @@ class EvolutionResult:
 
 def evolve_skill(
     skill_path: Path | str,
-    taskset_path: Path | str,
+    taskset_path: Path | str | TaskSet,
     project_root: Path | str = ".",
     max_iterations: int = 3,
     target_hqs: float = 5.0,
@@ -92,12 +92,13 @@ def evolve_skill(
     if max_iterations < 1:
         raise ValueError("max_iterations must be at least 1.")
     root = Path(project_root).resolve()
-    taskset = load_taskset(taskset_path)
+    taskset = taskset_path if isinstance(taskset_path, TaskSet) else load_taskset(taskset_path)
+    taskset_source = taskset.source_path or "<memory>"
     current_skill_path = Path(skill_path).resolve()
     iterations: list[EvolutionIteration] = []
     artifacts: list[dict[str, str]] = []
     steps: list[dict[str, Any]] = [
-        {"name": "load_taskset", "status": "completed", "path": str(taskset_path), "task_count": len(taskset.tasks)}
+        {"name": "load_taskset", "status": "completed", "path": taskset_source, "task_count": len(taskset.tasks)}
     ]
     stop_reason = "max_iterations"
 
@@ -302,7 +303,7 @@ def evolve_skill(
         trace_type="skill_evolution",
         input_data={
             "initial_skill_path": str(skill_path),
-            "taskset_path": str(taskset_path),
+            "taskset_path": taskset_source,
             "max_iterations": max_iterations,
             "target_hqs": target_hqs,
             "min_improvement": min_improvement,

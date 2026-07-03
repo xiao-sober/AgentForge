@@ -8,10 +8,24 @@
       "model": "qwen3.7-plus",
       "timeout_seconds": 180,
       "temperature": 0.2,
-      "max_tokens": 2500,
+      "max_tokens": 8192,
       "thinking_mode": {
         "enabled": true,
         "provider": "qwen"
+      }
+    },
+    "deepseek_v4_pro": {
+      "type": "openai_compatible",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-pro",
+      "timeout_seconds": 300,
+      "temperature": 0.2,
+      "max_tokens": 8192,
+      "thinking_mode": {
+        "enabled": true,
+        "provider": "deepseek",
+        "reasoning_effort": "high"
       }
     },
     "openai_compatible_example": {

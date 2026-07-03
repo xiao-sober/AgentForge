@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agentforge.skill_evolver.task_loader import load_taskset
+from agentforge.skill_evolver.task_loader import load_taskset, load_taskset_from_text
 
 
 class TaskLoaderTest(unittest.TestCase):
@@ -49,6 +49,28 @@ class TaskLoaderTest(unittest.TestCase):
             self.assertEqual(taskset.name, "tasks")
             self.assertEqual(taskset.tasks[0].task_id, "task_001")
             self.assertEqual(taskset.tasks[0].input, "Summarize the API requirement.")
+
+    def test_loads_json_taskset_with_utf8_bom(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "tasks.json"
+            payload = json.dumps({"tasks": [{"id": "cn", "input": "评审 API 设计。"}]}, ensure_ascii=False)
+            path.write_bytes(payload.encode("utf-8-sig"))
+
+            taskset = load_taskset(path)
+
+            self.assertEqual(taskset.tasks[0].task_id, "cn")
+            self.assertEqual(taskset.tasks[0].input, "评审 API 设计。")
+
+    def test_loads_json_taskset_from_stdin_text_with_bom(self):
+        text = "\ufeff" + json.dumps(
+            {"name": "stdin_tasks", "tasks": [{"id": "api", "input": "Review API errors."}]}
+        )
+
+        taskset = load_taskset_from_text(text, source_path="<stdin>", file_format="json")
+
+        self.assertEqual(taskset.name, "stdin_tasks")
+        self.assertEqual(taskset.source_path, "<stdin>")
+        self.assertEqual(taskset.tasks[0].task_id, "api")
 
     def test_rejects_duplicate_task_ids(self):
         with tempfile.TemporaryDirectory() as temp_dir:

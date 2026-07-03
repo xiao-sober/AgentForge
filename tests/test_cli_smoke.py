@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,9 +104,89 @@ class CliSmokeTest(unittest.TestCase):
             self.assertIn("provider timed out", stderr)
             self.assertFalse((root / "skills" / "api_design_skill" / "v1" / "SKILL.md").exists())
 
+    def test_cli_accepts_stdin_for_generate_run_and_evolve_taskset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            self.assertEqual(
+                _run_cli_with_stdin(
+                    [
+                        "generate-skill",
+                        "--project-root",
+                        str(root),
+                        "--local-only",
+                        "--stdin",
+                        "--json",
+                    ],
+                    "Create a UI review Skill for dashboard readability.",
+                ),
+                0,
+            )
+
+            skill_path = root / "skills" / "ui_review_skill" / "v1" / "SKILL.md"
+            self.assertTrue(skill_path.exists())
+
+            self.assertEqual(
+                _run_cli_with_stdin(
+                    [
+                        "run-skill",
+                        "--project-root",
+                        str(root),
+                        "--skill",
+                        str(skill_path),
+                        "--stdin",
+                        "--json",
+                    ],
+                    "Review a dashboard with crowded filters.",
+                ),
+                0,
+            )
+
+            taskset_json = "\ufeff" + json.dumps(
+                {
+                    "name": "stdin_ui_tasks",
+                    "tasks": [
+                        {
+                            "id": "dashboard",
+                            "input": "Review a dashboard with dense KPI cards.",
+                            "expected_output": ["issues", "recommendations"],
+                        }
+                    ],
+                }
+            )
+            self.assertEqual(
+                _run_cli_with_stdin(
+                    [
+                        "evolve-skill",
+                        "--project-root",
+                        str(root),
+                        "--skill",
+                        str(skill_path),
+                        "--stdin",
+                        "--max-iterations",
+                        "1",
+                        "--min-improvement",
+                        "0",
+                        "--json",
+                    ],
+                    taskset_json,
+                ),
+                0,
+            )
+            self.assertTrue(any((root / "runs" / "ui_review_skill").glob("**/run_result.json")))
+
 
 def _run_cli(args: list[str]) -> int:
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        return main(args)
+
+
+def _run_cli_with_stdin(args: list[str], stdin_text: str) -> int:
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
+        patch("sys.stdin", io.StringIO(stdin_text)),
+    ):
         return main(args)
 
 

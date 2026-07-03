@@ -47,6 +47,13 @@ class PlanExecutorTest(unittest.TestCase):
             self.assertEqual(len(result.plan_step_results), 2)
             self.assertTrue(all(item["status"] == "completed" for item in result.plan_step_results))
             self.assertIn("Multi-Step Skill Output", result.output_text)
+            first_input = result.run_results[0].outputs[0].input
+            second_input = result.run_results[1].outputs[0].input
+            self.assertIn("原始完整用户请求", first_input)
+            self.assertIn("Review dashboard layout then summarize accessibility risks.", first_input)
+            self.assertIn("当前执行焦点", second_input)
+            self.assertIn("summarize accessibility risks", second_input)
+            self.assertIn("Review dashboard layout", second_input)
             transition_names = [
                 transition.get("plan_step_name")
                 for transition in result.execution_state["transitions"]

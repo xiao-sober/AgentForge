@@ -124,7 +124,7 @@ def build_plan(intent: Intent, selected_skill: SkillCandidate | None) -> AgentPl
             rationale="The user explicitly asked to create a Skill.",
         )
     if intent.requires_skill and selected_skill:
-        execution_steps = _skill_execution_steps(subtasks or [intent.query], selected_skill)
+        execution_steps = _skill_execution_steps(subtasks or [intent.query], selected_skill, original_query=intent.query)
         return AgentPlan(
             action="run_skill",
             objective=objective,
@@ -155,7 +155,7 @@ def build_plan(intent: Intent, selected_skill: SkillCandidate | None) -> AgentPl
             rationale="A matching versioned Skill is available.",
         )
     if intent.requires_skill:
-        generated_steps = _skill_execution_steps(subtasks or [intent.query], None, start_index=2)
+        generated_steps = _skill_execution_steps(subtasks or [intent.query], None, start_index=2, original_query=intent.query)
         return AgentPlan(
             action="generate_and_run_skill",
             objective=objective,
@@ -222,14 +222,22 @@ def _skill_execution_steps(
     subtasks: list[str],
     selected_skill: SkillCandidate | None,
     start_index: int = 1,
+    original_query: str = "",
 ) -> list[PlanStep]:
+    original = original_query.strip() or (subtasks[0] if subtasks else "")
     if len(subtasks) <= 1:
         return [
             _step(
                 "run_skill",
                 "execute the selected Skill through Phase 2 runner",
                 "execute_plan",
-                tool_input=_skill_tool_input(subtasks[0] if subtasks else "", selected_skill, 1),
+                tool_input=_skill_tool_input(
+                    subtasks[0] if subtasks else "",
+                    selected_skill,
+                    1,
+                    original_query=original,
+                    subtask_count=1,
+                ),
                 expected_output="Skill execution output and artifacts.",
                 step_number=start_index,
             )
@@ -244,7 +252,13 @@ def _skill_execution_steps(
                 f"execute subtask {index} through the selected Skill",
                 "execute_plan",
                 depends_on=depends_on,
-                tool_input=_skill_tool_input(subtask, selected_skill, index),
+                tool_input=_skill_tool_input(
+                    subtask,
+                    selected_skill,
+                    index,
+                    original_query=original,
+                    subtask_count=len(subtasks),
+                ),
                 expected_output=f"Skill execution output for subtask {index}.",
                 step_number=step_number,
             )
@@ -252,8 +266,20 @@ def _skill_execution_steps(
     return steps
 
 
-def _skill_tool_input(subtask: str, selected_skill: SkillCandidate | None, index: int) -> dict[str, Any]:
-    payload: dict[str, Any] = {"subtask": subtask, "subtask_index": index}
+def _skill_tool_input(
+    subtask: str,
+    selected_skill: SkillCandidate | None,
+    index: int,
+    original_query: str,
+    subtask_count: int,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "subtask": subtask,
+        "subtask_index": index,
+        "subtask_count": subtask_count,
+        "original_query": original_query,
+        "skill_input": _skill_input_for_subtask(original_query, subtask, index, subtask_count),
+    }
     if selected_skill:
         payload.update(
             {
@@ -263,6 +289,24 @@ def _skill_tool_input(subtask: str, selected_skill: SkillCandidate | None, index
             }
         )
     return payload
+
+
+def _skill_input_for_subtask(original_query: str, subtask: str, index: int, subtask_count: int) -> str:
+    original = " ".join(original_query.strip().split())
+    focus = " ".join(subtask.strip().split())
+    if subtask_count <= 1 or not focus or focus == original:
+        return original
+    return "\n\n".join(
+        [
+            "原始完整用户请求：",
+            original,
+            f"当前执行焦点（第 {index}/{subtask_count} 步）：",
+            focus,
+            "执行要求：",
+            "请在处理当前执行焦点时保留原始完整请求中的全部上下文、约束、端点、字段和输出要求。"
+            "不要仅基于当前焦点片段判断信息不足；只有原始完整请求也缺失必要信息时，才请求补充。",
+        ]
+    )
 
 
 def _step(
@@ -342,12 +386,8 @@ def _complex_connectors() -> list[str]:
         r"\s+then\s+",
         r"\s+after\s+that\s+",
         r"\s+next\s+",
-        r"\s*;\s*",
-        r"\s*\|\s*",
         r"\s*\u7136\u540e\s*",
-        r"\s*\u518d\s*",
         r"\s*\u63a5\u7740\s*",
-        r"\s*\uff1b\s*",
     ]
 
 

@@ -223,7 +223,11 @@ class PlanExecutor:
             self.state.transition(step, "failed", "missing_skill", {"error": error})
             return
 
-        input_text = str(step.tool_input.get("subtask") or self.intent.query).strip()
+        input_text = str(
+            step.tool_input.get("skill_input")
+            or step.tool_input.get("subtask")
+            or self.intent.query
+        ).strip()
         try:
             run_result = run_skill(
                 self.skill_to_run.skill_path,
