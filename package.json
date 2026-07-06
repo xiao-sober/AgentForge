@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "web:install": "cd apps/web/frontend && npm install",
+    "web:dev": "npm --prefix apps/web/frontend run dev",
+    "web:build": "npm --prefix apps/web/frontend run build",
+    "web:preview": "npm --prefix apps/web/frontend run preview",
+    "web:typecheck": "npm --prefix apps/web/frontend run typecheck"
+  }
+}

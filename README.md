@@ -100,6 +100,7 @@ planner 每次只能返回一个 JSON 决策：
 ## 环境要求
 
 - Python 3.10 或更新版本
+- Node.js 20 或更新版本，包含 `npm`
 - Windows、macOS 或 Linux
 - 可选：`uv`
 - 可选：用于 provider 模式的大模型 API key
@@ -124,6 +125,12 @@ python -m venv .venv
 
 Linux / macOS 下把 `.venv\Scripts\python.exe` 替换为 `.venv/bin/python`。
 
+安装前端依赖：
+
+```bash
+npm run web:install
+```
+
 运行测试：
 
 ```bash
@@ -132,7 +139,13 @@ Linux / macOS 下把 `.venv\Scripts\python.exe` 替换为 `.venv/bin/python`。
 
 ## 本地启动
 
-启动本地服务：
+一体模式用于普通本地运行或验收。FastAPI 会同时服务 JSON API 和已经构建好的 React 页面，所以只需要打开 `8765`。首次启动或修改前端后，先构建前端：
+
+```bash
+npm run web:build
+```
+
+再启动本地服务：
 
 ```bash
 agentforge serve --host 127.0.0.1 --port 8765
@@ -142,6 +155,26 @@ agentforge serve --host 127.0.0.1 --port 8765
 
 ```text
 http://127.0.0.1:8765/
+```
+
+前端开发模式用于改 React 页面。这个模式下 `8765` 主要作为 API 后端，`5173` 由 Vite 服务同一个 React 工作台源码，并把 `/api` 请求代理到 `8765`。开发时通常只打开 `5173`，因为它有热更新和更适合调试的前端开发体验。
+
+终端 1 启动 FastAPI：
+
+```bash
+agentforge serve --host 127.0.0.1 --port 8765
+```
+
+终端 2 启动 Vite：
+
+```bash
+npm run web:dev
+```
+
+打开：
+
+```text
+http://127.0.0.1:5173/
 ```
 
 检查本地配置：
@@ -296,39 +329,42 @@ Provider 调用走兼容 `/chat/completions` 的 API。API key 必须放在 `con
 
 ## Web / API
 
-本地服务使用 Python 标准库 HTTP server，返回 JSON。
+本地服务使用 FastAPI。生产/本地一体模式下，`agentforge serve` 同时提供：
+
+- React Web 工作台：`http://127.0.0.1:8765/`
+- FastAPI JSON API：`http://127.0.0.1:8765/api/...`
 
 主要路由：
 
 ```text
-GET  /health
-GET  /version
-GET  /config
-POST /chat
-POST /skills/generate
-POST /skills/run
-POST /skills/evolve
-GET  /skills
-GET  /skills/<skillName>
-GET  /skills/<skillName>/<version>
-GET  /tasksets
-GET  /memory
-GET  /agent/runs/<runId>
-GET  /agent/runs/<runId>/tool-calls
-GET  /traces
-GET  /traces/<traceFileName>
-GET  /hqs
+GET  /api/health
+GET  /api/version
+GET  /api/config
+POST /api/chat
+POST /api/skills/generate
+POST /api/skills/run
+POST /api/skills/evolve
+GET  /api/skills
+GET  /api/skills/<skillName>
+GET  /api/skills/<skillName>/<version>
+GET  /api/tasksets
+GET  /api/memory
+GET  /api/agent/runs/<runId>
+GET  /api/agent/runs/<runId>/tool-calls
+GET  /api/traces
+GET  /api/traces/<traceFileName>
+GET  /api/hqs
 ```
 
 示例请求：
 
 ```bash
-curl -X POST http://127.0.0.1:8765/chat ^
+curl -X POST http://127.0.0.1:8765/api/chat ^
   -H "Content-Type: application/json" ^
   -d "{\"message\":\"Review dashboard layout readability.\",\"agent_mode\":\"tool_calling\",\"use_provider\":false}"
 ```
 
-`POST /chat` 默认值：
+`POST /api/chat` 默认值：
 
 ```json
 {
@@ -352,7 +388,7 @@ Tool-calling 的精简 payload 会额外包含：
 - `hqs_gate`
 - `quality_retry`
 
-`GET /config` 会隐藏密钥，不返回 API key 明文。
+`GET /api/config` 会隐藏密钥，不返回 API key 明文。
 
 ## Web 工作台
 
@@ -370,6 +406,23 @@ Web 工作台支持：
 - debug JSON 查看
 - 中文和英文 UI 切换
 
+前端源码位于 `apps/web/frontend/`，使用 React + TypeScript + Vite。页面实现修改 `apps/web/frontend/src/` 和 `apps/web/frontend/index.html`；`apps/web/frontend/dist/` 是 `npm run build` 生成的本地构建产物，会被 git 忽略，但会在 `agentforge serve` 的本地一体模式下由 FastAPI 直接服务。
+
+FastAPI backend 位于 `apps/web/backend/`，只负责 HTTP/API 边界，核心 Agent、Skill、HQS、memory 逻辑仍在 `src/agentforge/`。
+
+常用前端命令：
+
+```bash
+npm run web:install
+npm run web:dev
+npm run web:typecheck
+npm run web:build
+```
+
+这些根目录脚本会转发到 `apps/web/frontend/`。也可以直接进入前端目录运行 `npm install`、`npm run dev`、`npm run build`。
+
+开发模式默认使用 Vite `5173` 端口，并把 `/api` 请求代理到 `http://127.0.0.1:8765`。先启动 `agentforge serve --host 127.0.0.1 --port 8765`，再运行 `npm run web:dev`，打开 `http://127.0.0.1:5173/`。
+
 ## 本地产物
 
 AgentForge 会在项目根目录写入这些本地产物：
@@ -380,6 +433,7 @@ runs/                   Skill 执行输出
 traces/                 JSON traces
 data/memory/            working、episodic、semantic memory
 config/providers.json   本地 provider 配置，已 git-ignore
+apps/web/frontend/dist/ 前端构建产物，已 git-ignore
 ```
 
 重要 trace 类型：
@@ -396,6 +450,16 @@ config/providers.json   本地 provider 配置，已 git-ignore
 ## 项目结构
 
 ```text
+apps/web/
+  backend/              FastAPI API 层，调用 src/agentforge 核心能力
+    agentforge_web_backend/
+      main.py           FastAPI app 装配和启动入口
+      legacy_bridge.py  兼容旧 agentforge.web.routes 的 API 转发
+      static.py         React dist 静态资源服务
+  frontend/             React + TypeScript + Vite 工作台
+    src/                页面组件、API client、i18n、view-model
+    dist/               build 输出，不提交源码
+
 src/agentforge/
   agent/                Harness、planner、executor、tools、tool-calling loop
   common/               trace、diagnostics、cleanup、文件工具
@@ -404,7 +468,7 @@ src/agentforge/
   providers/            provider 配置和适配器
   skill_generator/      需求解析和 Skill 生成
   skill_evolver/        task set、runner、evaluator、rewriter、versioning
-  web/                  本地 HTTP server 和静态工作台
+  web/                  旧 HTTP 兼容层，保留给现有测试和调用方
 
 docs/                   设计说明和运行模式文档
 examples/               示例 Skills
@@ -417,6 +481,8 @@ tests/                  单元测试和集成测试
 交付前运行完整测试：
 
 ```bash
+npm run web:typecheck
+npm run web:build
 python -m unittest discover -s tests
 ```
 

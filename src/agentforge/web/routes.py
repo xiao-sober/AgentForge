@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,11 @@ class WebResponse:
     payload: dict[str, Any]
     headers: dict[str, str] | None = None
     body_text: str | None = None
+    body_bytes: bytes | None = None
 
     def body(self) -> bytes:
+        if self.body_bytes is not None:
+            return self.body_bytes
         if self.body_text is not None:
             return self.body_text.encode("utf-8")
         return json.dumps(self.payload, ensure_ascii=False, indent=2).encode("utf-8")
@@ -53,8 +57,12 @@ def handle_request(
     try:
         if method == "GET" and not path_parts:
             return _index(root)
-        if method == "GET" and len(path_parts) == 2 and path_parts[0] == "static":
-            return _static_asset(path_parts[1])
+        if method == "GET" and len(path_parts) >= 2 and path_parts[0] == "static":
+            return _static_asset(path_parts[1:], root)
+        if method == "GET" and len(path_parts) == 1 and path_parts[0] in {"app.js", "app.css"}:
+            return _static_asset(path_parts, root)
+        if method == "GET" and len(path_parts) >= 2 and path_parts[0] == "assets":
+            return _static_asset(path_parts, root)
         if method == "GET" and path_parts == ["health"]:
             return _json(200, build_health_report(root))
         if method == "GET" and path_parts == ["version"]:
@@ -219,22 +227,48 @@ def _evolve_skill(body: bytes | str | None, root: Path) -> WebResponse:
 
 
 def _index(root: Path) -> WebResponse:
+    index_path = _frontend_dist_dir(root) / "index.html"
+    if not index_path.is_file():
+        return _frontend_not_built()
     return WebResponse(
         status=200,
         payload={},
         headers={"Content-Type": "text/html; charset=utf-8"},
-        body_text=_read_static_text("index.html"),
+        body_text=index_path.read_text(encoding="utf-8"),
     )
 
 
-def _static_asset(filename: str) -> WebResponse:
-    allowed = {
-        "app.css": "text/css; charset=utf-8",
-        "app.js": "application/javascript; charset=utf-8",
-    }
-    if filename not in allowed:
-        return _json(404, {"error": f"Static asset not found: {filename}"})
-    return WebResponse(status=200, payload={}, headers={"Content-Type": allowed[filename]}, body_text=_read_static_text(filename))
+def _static_asset(path_parts: list[str], root: Path) -> WebResponse:
+    static_root = _frontend_dist_dir(root)
+    relative = Path(*path_parts)
+    asset_path = _resolve_under_roots(
+        static_root,
+        relative,
+        [static_root],
+        "Static asset path must stay under apps/web/frontend/dist/.",
+    )
+    if not asset_path.exists() or not asset_path.is_file():
+        return _json(404, {"error": f"Static asset not found: {'/'.join(path_parts)}"})
+    content_type = _content_type(asset_path)
+    return WebResponse(
+        status=200,
+        payload={},
+        headers={"Content-Type": content_type},
+        body_bytes=asset_path.read_bytes(),
+    )
+
+
+def _frontend_not_built() -> WebResponse:
+    return WebResponse(
+        status=503,
+        payload={},
+        headers={"Content-Type": "text/html; charset=utf-8"},
+        body_text=(
+            "<!doctype html><html><body><h1>AgentForge Web frontend is not built.</h1>"
+            "<p>Run <code>npm install</code> and <code>npm run build</code> in "
+            "<code>apps/web/frontend</code>.</p></body></html>"
+        ),
+    )
 
 
 def _skills(root: Path) -> WebResponse:
@@ -823,9 +857,15 @@ def _safe_path_segment(value: str, label: str) -> str:
     return value
 
 
-def _read_static_text(filename: str) -> str:
-    path = Path(__file__).parent / "static" / filename
-    return path.read_text(encoding="utf-8")
+def _frontend_dist_dir(root: Path) -> Path:
+    return root / "apps" / "web" / "frontend" / "dist"
+
+
+def _content_type(path: Path) -> str:
+    guessed = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    if guessed.startswith("text/") or guessed in {"application/javascript", "application/json", "image/svg+xml"}:
+        return f"{guessed}; charset=utf-8"
+    return guessed
 
 
 def _trace_url(trace_path: Path) -> str:

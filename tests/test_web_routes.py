@@ -30,6 +30,7 @@ class WebRoutesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _write_skill(root)
+            _write_frontend_dist(root)
 
             index = handle_request("GET", "/", project_root=root)
             self.assertEqual(index.status, 200)
@@ -326,6 +327,17 @@ class WebRoutesTest(unittest.TestCase):
 def _write_skill(root: Path) -> Path:
     skill_path = root / "skills" / "ui_review_skill" / "v1" / "SKILL.md"
     return _write_skill_at(skill_path)
+
+
+def _write_frontend_dist(root: Path) -> Path:
+    dist = root / "apps" / "web" / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text(
+        '<!doctype html><html lang="zh-CN"><body><h1>AgentForge</h1><script type="module" src="/app.js"></script></body></html>',
+        encoding="utf-8",
+    )
+    (dist / "app.js").write_text("console.log('AgentForge');", encoding="utf-8")
+    return dist
 
 
 def _write_skill_at(skill_path: Path) -> Path:

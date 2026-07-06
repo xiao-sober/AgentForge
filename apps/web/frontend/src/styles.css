@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   --bg: #eef3f8;
-  --bg-deep: #dfe7f0;
+  --bg-deep: #dde7f1;
   --surface: #ffffff;
   --surface-soft: #f8fafc;
   --surface-strong: #111827;
@@ -37,6 +37,8 @@ body {
 
 h1,
 h2,
+h3,
+h4,
 p {
   margin: 0;
 }
@@ -44,6 +46,7 @@ p {
 h1 {
   font-size: 23px;
   font-weight: 720;
+  letter-spacing: 0;
 }
 
 h2 {
@@ -103,7 +106,7 @@ h2 {
 }
 
 .navlinks a,
-#traceValue a {
+.meta-panel a {
   color: var(--accent-strong);
   text-decoration: none;
 }
@@ -173,11 +176,10 @@ h2 {
 
 .status-tile strong {
   display: block;
-  overflow: hidden;
   font-size: 18px;
   font-weight: 760;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .settings-panel,
@@ -278,7 +280,6 @@ textarea {
   font: inherit;
 }
 
-input[type="text"],
 input[type="number"],
 select {
   display: block;
@@ -368,14 +369,8 @@ button.secondary {
   color: var(--muted);
 }
 
-.result > p,
-.result > h1,
-.result > h2,
-.result > h3,
-.result > ul,
-.result > ol {
-  margin-left: 18px;
-  margin-right: 18px;
+.result-body {
+  padding: 14px 18px 18px;
 }
 
 .run-ribbon {
@@ -648,16 +643,13 @@ dd {
   background: var(--success);
 }
 
-.timeline li.completed_with_warnings::before {
+.timeline li.completed_with_warnings::before,
+.timeline li.skipped::before {
   background: var(--amber);
 }
 
 .timeline li.failed::before {
   background: var(--danger);
-}
-
-.timeline li.skipped::before {
-  background: var(--amber);
 }
 
 .timeline strong {

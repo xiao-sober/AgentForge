@@ -75,14 +75,6 @@ def create_server(project_root: Path | str = ".", host: str = "127.0.0.1", port:
 
 
 def run_server(project_root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) -> None:
-    root = Path(project_root).resolve()
-    server = create_server(root, host=host, port=port)
-    actual_host, actual_port = server.server_address
-    print(f"AgentForge API listening on http://{actual_host}:{actual_port}")
-    print(f"Project root: {root}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("AgentForge API stopped.")
-    finally:
-        server.server_close()
+    from agentforge_web_backend.main import run_server as run_fastapi_server
+
+    run_fastapi_server(project_root=project_root, host=host, port=port)
