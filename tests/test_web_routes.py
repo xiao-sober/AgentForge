@@ -184,6 +184,47 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(chat.status, 200)
             self.assertIn("Provider Skill Output", chat.payload["response"])
 
+    def test_chat_supports_tool_calling_agent_mode(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_skill(root)
+
+            chat = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps({"message": "Review dashboard layout readability.", "agent_mode": "tool_calling"}),
+                project_root=root,
+            )
+
+            self.assertEqual(chat.status, 200)
+            self.assertEqual(chat.payload["agent_mode"], "tool_calling_agent")
+            self.assertEqual(chat.payload["tool_calling"]["status"], "completed")
+            self.assertTrue(chat.payload["trace_url"].startswith("/traces/"))
+            self.assertTrue(any(step["name"] == "execute_plan" for step in chat.payload["timeline"]))
+            self.assertIn("tool_call_timeline", chat.payload)
+            self.assertEqual(chat.payload["parse_repair_count"], 0)
+            self.assertEqual(chat.payload["invalid_call_count"], 0)
+            self.assertEqual(chat.payload["final_answer_source"], "harness_response")
+            self.assertIn("hqs_gate", chat.payload)
+            self.assertIn("quality_retry", chat.payload)
+            self.assertTrue(any(item["tool_name"] == "build_response" for item in chat.payload["tool_call_timeline"]))
+
+            run_detail = handle_request("GET", f"/agent/runs/{chat.payload['run_id']}", project_root=root)
+            self.assertEqual(run_detail.status, 200)
+            self.assertEqual(run_detail.payload["run_id"], chat.payload["run_id"])
+            self.assertEqual(run_detail.payload["agent_mode"], "tool_calling_agent")
+            self.assertTrue(run_detail.payload["tool_call_timeline"])
+
+            tool_calls = handle_request(
+                "GET",
+                f"/agent/runs/{chat.payload['run_id']}/tool-calls",
+                project_root=root,
+            )
+            self.assertEqual(tool_calls.status, 200)
+            self.assertEqual(tool_calls.payload["run_id"], chat.payload["run_id"])
+            self.assertEqual(tool_calls.payload["final_answer_source"], "harness_response")
+            self.assertTrue(any(item["tool_name"] == "build_response" for item in tool_calls.payload["tool_call_timeline"]))
+
     def test_chat_surfaces_provider_task_failure_without_fallback(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

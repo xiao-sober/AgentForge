@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from agentforge.agent.harness import AgentHarness
 from agentforge.common.artifacts import cleanup_artifacts
 from agentforge.common.diagnostics import build_config_report, build_health_report, build_version_report
 from agentforge.common.llm_client import LLMProviderError
@@ -75,6 +76,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use the configured model provider instead of deterministic local execution.",
     )
     run.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+
+    chat = subparsers.add_parser("agent-chat", help="Run the Agent chat harness from the CLI.")
+    chat_input_group = chat.add_mutually_exclusive_group(required=True)
+    chat_input_group.add_argument("--input", help="Chat message text.")
+    chat_input_group.add_argument("--input-file", type=Path, help="Path to a text file containing the chat message.")
+    chat_input_group.add_argument("--stdin", action="store_true", help="Read the chat message from standard input.")
+    chat.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for local artifacts.")
+    chat.add_argument(
+        "--provider-config",
+        type=Path,
+        default=Path("config/providers.json"),
+        help="Provider JSON path. Relative paths are resolved under --project-root.",
+    )
+    chat.add_argument("--provider", help="Provider name in the provider JSON.")
+    chat.add_argument("--model", help="Override the configured model name.")
+    chat.add_argument("--use-provider", action="store_true", help="Use the configured model provider.")
+    chat.add_argument(
+        "--agent-mode",
+        choices=["harness", "harness-workflow", "tool-calling"],
+        default="harness-workflow",
+        help="Agent execution mode.",
+    )
+    chat.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    chat.add_argument("--debug", action="store_true", help="Include full Agent run internals in JSON output.")
 
     evolve = subparsers.add_parser("evolve-skill", help="Run a Skill evolution loop against a task set.")
     evolve.add_argument("--skill", type=Path, required=True, help="Path to skills/<skill_slug>/<version>/SKILL.md.")
@@ -234,6 +259,28 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Mode: {result.mode}")
         return 0
 
+    if args.command == "agent-chat":
+        try:
+            input_text = _read_cli_text(args, "input", "input_file")
+            project_root = args.project_root.resolve()
+            llm_client = _optional_llm_client(args, project_root)
+            harness = AgentHarness(project_root=project_root, llm_client=llm_client)
+            if args.agent_mode == "tool-calling":
+                result = harness.tool_chat(input_text)
+            else:
+                result = harness.chat(input_text)
+        except (ProviderConfigError, LLMProviderError, ValueError, OSError) as exc:
+            parser.exit(1, f"error: {exc}\n")
+
+        payload = result.to_dict() if args.debug else _compact_agent_chat_payload(result)
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print(result.response)
+            print(f"Trace: {result.trace_path}")
+            print(f"Stop reason: {result.stop_reason}")
+        return 0
+
     if args.command == "evolve-skill":
         try:
             project_root = args.project_root.resolve()
@@ -379,6 +426,39 @@ def _optional_llm_client(args: argparse.Namespace, project_root: Path):
         model_override=args.model,
     )
     return create_llm_client(provider_config)
+
+
+def _compact_agent_chat_payload(result) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "run_id": result.run.run_id,
+        "agent_mode": getattr(result, "agent_mode", "harness_workflow"),
+        "response": result.response,
+        "trace_path": str(result.trace_path),
+        "hqs": result.hqs.to_dict(),
+        "system_hqs": result.system_hqs.to_dict(),
+        "stop_reason": result.stop_reason,
+    }
+    if hasattr(result, "tool_calling"):
+        payload.update(
+            {
+                "tool_call_timeline": result.tool_call_timeline,
+                "parse_repair_count": result.parse_repair_count,
+                "invalid_call_count": result.invalid_call_count,
+                "final_answer_source": result.final_answer_source,
+                "hqs_gate": result.hqs_gate,
+                "quality_retry": result.quality_retry,
+            }
+        )
+    else:
+        payload.update(
+            {
+                "intent": result.intent.to_dict(),
+                "selected_skill": result.selected_skill.to_dict() if result.selected_skill else None,
+                "reflection": result.reflection,
+                "reinforcement": result.reinforcement,
+            }
+        )
+    return payload
 
 
 if __name__ == "__main__":

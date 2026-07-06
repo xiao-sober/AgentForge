@@ -11,6 +11,14 @@ class IntentParserTest(unittest.TestCase):
         self.assertTrue(intent.needs_skill_generation)
         self.assertEqual(intent.skill_hint, "ui_review_skill")
 
+    def test_detects_english_skill_generation_with_article(self):
+        intent = parse_intent("Generate a Skill for API response contract review.")
+
+        self.assertEqual(intent.intent_type, "generate_skill")
+        self.assertTrue(intent.needs_skill_generation)
+        self.assertFalse(intent.requires_skill)
+        self.assertEqual(intent.skill_hint, "api_design_skill")
+
     def test_detects_chinese_skill_generation_with_descriptor(self):
         intent = parse_intent("生成一个 UI 分析 Skill")
 
@@ -36,6 +44,12 @@ class IntentParserTest(unittest.TestCase):
         intent = parse_intent("Inspect the latest trace.")
 
         self.assertEqual(intent.intent_type, "inspect_traces")
+        self.assertFalse(intent.requires_skill)
+
+    def test_detects_memory_query(self):
+        intent = parse_intent("What useful AgentForge memory do you have about recent provider dry runs?")
+
+        self.assertEqual(intent.intent_type, "query_memory")
         self.assertFalse(intent.requires_skill)
 
     def test_falls_back_to_chat(self):

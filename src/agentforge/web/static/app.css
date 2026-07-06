@@ -194,7 +194,7 @@ h2 {
 
 .settings-panel {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(180px, 220px);
   gap: 12px;
   align-items: center;
   margin-bottom: 14px;
@@ -204,6 +204,16 @@ h2 {
 .mode-toggle {
   min-width: 132px;
   justify-content: flex-end;
+}
+
+.mode-select {
+  min-width: 180px;
+  margin-bottom: 0;
+}
+
+.mode-select span {
+  display: block;
+  margin-bottom: 6px;
 }
 
 .mode-hint {
@@ -660,6 +670,72 @@ dd {
 .timeline span {
   display: block;
   overflow-wrap: anywhere;
+}
+
+.timeline li.tool-call-row {
+  padding-bottom: 14px;
+}
+
+.tool-call-head {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-call-head > span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tool-call-details {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-call-detail {
+  border: 1px solid rgba(214, 222, 232, 0.9);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.tool-call-detail summary {
+  cursor: pointer;
+  padding: 7px 9px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.json-block {
+  max-height: 260px;
+  margin: 0;
+  padding: 9px;
+  overflow: auto;
+  border-top: 1px solid rgba(214, 222, 232, 0.84);
+  background: rgba(15, 23, 42, 0.03);
+  color: #253145;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.validation-detail {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: rgba(254, 242, 242, 0.72);
+}
+
+.validation-errors {
+  margin: 0;
+  padding: 8px 10px 10px 26px;
+  border-top: 1px solid rgba(220, 38, 38, 0.18);
+  color: var(--danger);
+}
+
+.repair-badge {
+  border-color: rgba(14, 165, 233, 0.24);
+  background: rgba(224, 242, 254, 0.78);
+  color: #075985;
 }
 
 .section-heading {

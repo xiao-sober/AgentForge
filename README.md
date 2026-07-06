@@ -26,6 +26,7 @@ Implemented:
 - Skill execution
 - Skill evolution
 - Agent harness run loop with local ToolRegistry
+- Tool-calling Agent loop MVP with model-visible tool schemas, decision parsing, policy checks, and trace recording
 - State-driven Planner/Executor for multi-step Skill execution
 - JSON Web/API MVP and local Web workbench
 - Local memory with retrieval scores and match reasons
@@ -154,10 +155,14 @@ GET  /skills/<skillName>
 GET  /skills/<skillName>/<version>
 GET  /tasksets
 GET  /memory
+GET  /agent/runs/<runId>
+GET  /agent/runs/<runId>/tool-calls
 GET  /traces
 GET  /traces/<traceFileName>
 GET  /hqs
 ```
+
+`POST /chat` defaults to the deterministic harness workflow. Send `agent_mode: "tool_calling"` to run the Tool-Calling Agent MVP. The tool-calling mode exposes only the bounded model-callable tool set, validates every model decision through policy, and writes a `tool_calling_agent` trace.
 
 `POST /chat` returns:
 
@@ -179,7 +184,11 @@ GET  /hqs
 - `stop_reason`
 - `reinforcement`
 
+Tool-calling compact responses also include `tool_call_timeline`, `parse_repair_count`, `invalid_call_count`, `final_answer_source`, `hqs_gate`, and `quality_retry`. `final_answer_source` is `harness_response` when a Harness `build_response` result exists; the model final answer is treated as a completion signal.
+
 By default, `/chat` returns a compact payload for UI use. Send `{"debug": true}` or call `/chat?debug=1` to receive the full execution payload, including the full `run` object, execution result, memory context, and per-step inputs/outputs.
+
+`GET /agent/runs/<runId>` resolves the local trace for a run and returns run output, HQS, stop reason, and tool-call timeline. `GET /agent/runs/<runId>/tool-calls` returns the timeline only, including model decisions, arguments, validation errors, observation summaries, and parse repair metadata when present.
 
 `GET /skills/<skillName>/<version>` returns the Skill Markdown, metadata, and `diff.patch` text when the version has an evolution diff.
 
@@ -202,6 +211,7 @@ Provider overrides are CLI-only. The Web/API uses the default provider config an
 agentforge generate-skill
 agentforge validate-skill
 agentforge run-skill
+agentforge agent-chat
 agentforge evolve-skill
 agentforge serve
 agentforge check-config
@@ -327,6 +337,7 @@ Trace types include:
 - `skill_evaluation`
 - `skill_evolution`
 - `agent_chat`
+- `tool_calling_agent`
 - `memory_update`
 
 **Agent Run**
@@ -345,6 +356,8 @@ Each `/chat` request creates an `AgentRun` with:
 Typical steps include intent parsing, memory retrieval, Skill selection, planning, execution, observation, response building, HQS evaluation, HQS gate, reflection, reinforcement check, memory save, and trace write.
 
 The harness uses a local `ToolRegistry` and `AgentRunLoop` to execute steps. Each registered tool declares input schema, output schema, known error types, permission level, idempotency, and optional timeout metadata. Tool inputs and outputs are validated before they are recorded in the run timeline.
+
+The Tool-Calling Agent mode adds a model decision loop around the same registry. Harness-only setup still receives input and parses intent first. The model then sees a reduced tool schema list and must return one JSON decision: `tool_call`, `final_answer`, or `cannot_continue`. AgentForge validates the tool name, arguments, permission level, prerequisite state, invalid-call budget, and tool-error budget before executing anything. Persistent memory writes and final HQS evaluation remain Harness-controlled.
 
 **Planner and Executor**
 

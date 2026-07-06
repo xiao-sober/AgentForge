@@ -15,6 +15,7 @@ ALLOWED_TRACE_TYPES = {
     "skill_evaluation",
     "skill_evolution",
     "agent_chat",
+    "tool_calling_agent",
     "memory_update",
     "hqs_diagnosis",
 }

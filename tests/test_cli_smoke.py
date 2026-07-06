@@ -45,6 +45,58 @@ class CliSmokeTest(unittest.TestCase):
             self.assertEqual(
                 _run_cli(
                     [
+                        "agent-chat",
+                        "--project-root",
+                        str(root),
+                        "--agent-mode",
+                        "tool-calling",
+                        "--input",
+                        "Review dashboard layout readability.",
+                        "--json",
+                    ]
+                ),
+                0,
+            )
+            exit_code, stdout, stderr = _run_cli_capture(
+                [
+                    "agent-chat",
+                    "--project-root",
+                    str(root),
+                    "--agent-mode",
+                    "tool-calling",
+                    "--input",
+                    "Review dashboard layout readability.",
+                    "--json",
+                ]
+            )
+            self.assertEqual(exit_code, 0, stderr)
+            payload = json.loads(stdout)
+            self.assertEqual(payload["agent_mode"], "tool_calling_agent")
+            self.assertIn("tool_call_timeline", payload)
+            self.assertIn("final_answer_source", payload)
+            self.assertNotIn("tool_calling", payload)
+
+            exit_code, stdout, stderr = _run_cli_capture(
+                [
+                    "agent-chat",
+                    "--project-root",
+                    str(root),
+                    "--agent-mode",
+                    "tool-calling",
+                    "--input",
+                    "Review dashboard layout readability.",
+                    "--json",
+                    "--debug",
+                ]
+            )
+            self.assertEqual(exit_code, 0, stderr)
+            debug_payload = json.loads(stdout)
+            self.assertIn("tool_calling", debug_payload)
+            self.assertIn("run", debug_payload)
+
+            self.assertEqual(
+                _run_cli(
+                    [
                         "run-skill",
                         "--project-root",
                         str(root),

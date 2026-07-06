@@ -44,7 +44,20 @@ def parse_intent(user_input: str) -> Intent:
     reasons: list[str] = []
     skill_hint = _detect_skill_hint(lowered)
 
-    if _contains_any(lowered, ["generate skill", "create skill", "new skill", "skill.md"]) or _contains_any(
+    if _contains_any(
+        lowered,
+        [
+            "generate skill",
+            "generate a skill",
+            "create skill",
+            "create a skill",
+            "build a skill",
+            "make a skill",
+            "write a skill",
+            "new skill",
+            "skill.md",
+        ],
+    ) or _contains_any(
         query, ["生成 Skill", "创建 Skill", "新 Skill", "生成一个 Skill", "生成一个Skill"]
     ) or _matches_chinese_skill_generation(query):
         reasons.append("explicit_skill_generation")
@@ -78,6 +91,17 @@ def parse_intent(user_input: str) -> Intent:
             skill_hint=skill_hint,
             confidence=0.8,
             reasons=["inspect_traces"],
+        )
+
+    if _is_memory_query_request(lowered):
+        return Intent(
+            intent_type="query_memory",
+            query=query,
+            requires_skill=False,
+            needs_skill_generation=False,
+            skill_hint=skill_hint,
+            confidence=0.85,
+            reasons=["query_memory"],
         )
 
     skill_action = _contains_any(
@@ -141,6 +165,17 @@ def _is_trace_inspection_request(lowered: str, original: str) -> bool:
     if re.search(r"\btrace\s+[A-Za-z0-9_.-]+\.json\b", normalized):
         return True
     return _contains_any(original, ["查看 trace", "打开 trace", "查看日志", "查看轨迹"])
+
+
+def _is_memory_query_request(lowered: str) -> bool:
+    normalized = lowered.replace("_", " ")
+    if re.search(r"\b(what|show|list|summarize|query|search|inspect|retrieve)\b.*\b(memory|memories|episodic|semantic|remembered|remember)\b", normalized):
+        return True
+    if re.search(r"\b(memory|memories|episodic|semantic)\b.*\b(about|for|query|summary|status|recent|dry runs?)\b", normalized):
+        return True
+    if re.search(r"\bwhat\s+do\s+you\s+(remember|know)\b", normalized):
+        return True
+    return False
 
 
 def _matches_chinese_skill_generation(text: str) -> bool:

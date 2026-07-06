@@ -14,6 +14,9 @@ const i18n = {
     traces: "Traces",
     mode: "Mode",
     runMode: "Run Mode",
+    agentMode: "Agent Mode",
+    harnessWorkflow: "harness_workflow",
+    toolCallingAgent: "tool_calling_agent",
     useProvider: "Call model",
     localModeHint: "Local deterministic mode",
     providerModeHint: "Model provider mode",
@@ -125,7 +128,20 @@ const i18n = {
     step: "step",
     transition: "transition",
     episode: "episode",
-    skillSource: "source"
+    skillSource: "source",
+    toolCalls: "Tool Calls",
+    modelDecision: "Model Decision",
+    toolArguments: "Tool Arguments",
+    validation: "Validation",
+    validationErrors: "Validation Errors",
+    observation: "Observation",
+    parseRepair: "Parse Repair",
+    repaired: "repaired",
+    repairStrategy: "repair",
+    finalAnswerSource: "Final answer",
+    repairCount: "repairs",
+    hqsGate: "HQS Gate",
+    qualityRetry: "Retry"
   },
   zh: {
     statusLoading: "正在检查本地运行状态...",
@@ -273,6 +289,7 @@ const el = {
   modeValue: document.getElementById("modeValue"),
   languageToggle: document.getElementById("languageToggle"),
   useProvider: document.getElementById("useProvider"),
+  agentMode: document.getElementById("agentMode"),
   modeHint: document.getElementById("modeHint"),
   chatMessage: document.getElementById("chatMessage"),
   chatSend: document.getElementById("chatSend"),
@@ -318,11 +335,33 @@ function applyLanguage() {
   updateModeHint();
   renderWarnings(state.lastPayload && state.lastPayload.warnings ? state.lastPayload.warnings : []);
   renderArtifacts(state.lastPayload && state.lastPayload.artifacts ? state.lastPayload.artifacts : []);
-  renderTimeline(state.lastPayload && state.lastPayload.timeline ? state.lastPayload.timeline : []);
+  renderTimeline(timelineForPayload(state.lastPayload));
   void renderActiveDrilldown();
 }
 
+function ensureAgentModeControl() {
+  if (el.agentMode) {
+    return;
+  }
+  const settings = document.querySelector(".settings-panel");
+  if (!settings) {
+    return;
+  }
+  const label = document.createElement("label");
+  label.className = "mode-select";
+  label.innerHTML = [
+    `<span data-i18n="agentMode">${escapeHtml(t("agentMode"))}</span>`,
+    `<select id="agentMode">`,
+    `<option value="harness_workflow" data-i18n="harnessWorkflow">${escapeHtml(t("harnessWorkflow"))}</option>`,
+    `<option value="tool_calling" data-i18n="toolCallingAgent">${escapeHtml(t("toolCallingAgent"))}</option>`,
+    `</select>`
+  ].join("");
+  settings.appendChild(label);
+  el.agentMode = document.getElementById("agentMode");
+}
+
 async function init() {
+  ensureAgentModeControl();
   applyLanguage();
   bindEvents();
   updateModeHint();
@@ -337,6 +376,9 @@ function bindEvents() {
   });
 
   el.useProvider.addEventListener("change", updateModeHint);
+  if (el.agentMode) {
+    el.agentMode.addEventListener("change", updateModeHint);
+  }
 
   for (const tab of document.querySelectorAll(".tab")) {
     tab.addEventListener("click", () => activateTab(tab.dataset.tab));
@@ -561,13 +603,16 @@ function renderLongTaskProgress(phases, startedAt) {
 
 function providerPayload() {
   return {
-    use_provider: el.useProvider.checked
+    use_provider: el.useProvider.checked,
+    agent_mode: el.agentMode ? el.agentMode.value : "harness_workflow"
   };
 }
 
 function updateModeHint() {
-  el.modeHint.textContent = el.useProvider.checked ? t("providerModeHint") : t("localModeHint");
-  el.modeValue.textContent = el.useProvider.checked ? t("providerMode") : t("localMode");
+  const agentMode = el.agentMode && el.agentMode.value === "tool_calling" ? t("toolCallingAgent") : t("harnessWorkflow");
+  const providerHint = el.useProvider.checked ? t("providerModeHint") : t("localModeHint");
+  el.modeHint.textContent = `${providerHint} · ${agentMode}`;
+  el.modeValue.textContent = `${el.useProvider.checked ? t("providerMode") : t("localMode")} / ${agentMode}`;
 }
 
 function renderChatPayload(payload) {
@@ -583,7 +628,7 @@ function renderChatPayload(payload) {
   renderTrace(payload.trace_url, payload.trace_file || payload.trace_path);
   renderWarnings(payload.warnings || []);
   renderArtifacts(payload.artifacts || []);
-  renderTimeline(payload.timeline || (payload.run && payload.run.steps) || []);
+  renderTimeline(timelineForPayload(payload));
   setDebug(payload);
 }
 
@@ -687,8 +732,17 @@ function renderRunRibbon(payload) {
   if (payload.run_id) {
     chips.push([t("runId"), payload.run_id]);
   }
+  if (payload.agent_mode) {
+    chips.push([t("agentMode"), payload.agent_mode]);
+  }
+  if (payload.final_answer_source) {
+    chips.push([t("finalAnswerSource"), payload.final_answer_source]);
+  }
   if (payload.stop_reason) {
     chips.push([t("stop"), payload.stop_reason]);
+  }
+  if (typeof payload.parse_repair_count === "number" && payload.parse_repair_count > 0) {
+    chips.push([t("repairCount"), payload.parse_repair_count]);
   }
   if (payload.trace_file || payload.trace_path) {
     chips.push([t("traceReady"), traceLabel(payload.trace_file || payload.trace_path)]);
@@ -746,6 +800,22 @@ function renderArtifacts(artifacts) {
   }
 }
 
+function timelineForPayload(payload) {
+  if (!payload) {
+    return [];
+  }
+  if (Array.isArray(payload.tool_call_timeline) && payload.tool_call_timeline.length) {
+    return payload.tool_call_timeline;
+  }
+  if (Array.isArray(payload.timeline)) {
+    return payload.timeline;
+  }
+  if (payload.run && Array.isArray(payload.run.steps)) {
+    return payload.run.steps;
+  }
+  return [];
+}
+
 function renderTimeline(steps) {
   el.timeline.innerHTML = "";
   if (!steps.length) {
@@ -757,6 +827,12 @@ function renderTimeline(steps) {
   for (const step of steps) {
     const item = document.createElement("li");
     item.className = step.status || "";
+    if (isToolCallTimelineStep(step)) {
+      item.classList.add("tool-call-row");
+      item.innerHTML = toolCallTimelineHtml(step);
+      el.timeline.appendChild(item);
+      continue;
+    }
     const name = step.name || t("step");
     const kind = step.kind ? ` · ${step.kind}` : "";
     const counts = [];
@@ -932,7 +1008,91 @@ function renderMetadataTable(metadata) {
   return rows ? `<dl class="drill-kv">${rows}</dl>` : "";
 }
 
+function isToolCallTimelineStep(step) {
+  return Boolean(
+    step &&
+    (
+      step.model_decision ||
+      step.decision_type ||
+      step.tool_name ||
+      step.validation ||
+      step.observation ||
+      step.observation_summary ||
+      step.parse_repair ||
+      step.tool_result
+    )
+  );
+}
+
+function toolCallTimelineHtml(step) {
+  const status = step.status || t("unknown");
+  const name = step.tool_name || step.name || step.decision_type || t("step");
+  const decisionType = step.decision_type || (step.model_decision && step.model_decision.type) || "";
+  const badges = [
+    chipHtml(t("status"), status),
+    decisionType ? chipHtml(t("decision"), decisionType) : "",
+    step.iteration ? chipHtml(t("iterations"), step.iteration) : "",
+    repairBadgeHtml(step.parse_repair || (step.model_decision && step.model_decision.parse_metadata)),
+  ].join("");
+  return [
+    `<div class="tool-call-head"><strong>${escapeHtml(name)}</strong><span>${badges}</span></div>`,
+    `<div class="tool-call-details">`,
+    detailJsonHtml(t("modelDecision"), step.model_decision),
+    detailJsonHtml(t("toolArguments"), step.arguments),
+    validationHtml(step),
+    detailJsonHtml(t("observation"), step.observation_summary || step.observation),
+    detailJsonHtml(t("parseRepair"), step.parse_repair || (step.model_decision && step.model_decision.parse_metadata)),
+    `</div>`
+  ].join("");
+}
+
+function validationHtml(step) {
+  const validation = step.validation;
+  const errors = Array.isArray(step.validation_errors) ? step.validation_errors : [];
+  if (!validation && !errors.length && !(Array.isArray(step.errors) && step.errors.length)) {
+    return "";
+  }
+  const extraErrors = Array.isArray(step.errors) ? step.errors : [];
+  const errorHtml = [...errors, ...extraErrors].length
+    ? `<ul class="validation-errors">${[...errors, ...extraErrors].map((error) => `<li>${escapeHtml(formatMetadataValue(error))}</li>`).join("")}</ul>`
+    : "";
+  return [
+    `<details class="tool-call-detail validation-detail" ${errors.length || extraErrors.length ? "open" : ""}>`,
+    `<summary>${escapeHtml(t("validation"))}</summary>`,
+    validation ? jsonBlockHtml(validation) : "",
+    errorHtml,
+    `</details>`
+  ].join("");
+}
+
+function repairBadgeHtml(metadata) {
+  if (!metadata || metadata.repaired !== true) {
+    return "";
+  }
+  return `<span class="badge repair-badge">${escapeHtml(t("repaired"))}: ${escapeHtml(metadata.repair_strategy || t("unknown"))}</span>`;
+}
+
+function detailJsonHtml(label, value) {
+  if (value === undefined || value === null || value === "" || (typeof value === "object" && !Object.keys(value).length)) {
+    return "";
+  }
+  return [
+    `<details class="tool-call-detail">`,
+    `<summary>${escapeHtml(label)}</summary>`,
+    jsonBlockHtml(value),
+    `</details>`
+  ].join("");
+}
+
+function jsonBlockHtml(value) {
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return `<pre class="json-block">${escapeHtml(text)}</pre>`;
+}
+
 function traceStepHtml(step) {
+  if (isToolCallTimelineStep(step)) {
+    return `<li class="${escapeHtml(step.status || "")} tool-call-row">${toolCallTimelineHtml(step)}</li>`;
+  }
   const status = step.status || t("unknown");
   const name = step.name || step.step_id || t("step");
   const detail = step.kind || step.tool_name || step.error_type || "";

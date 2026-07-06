@@ -79,6 +79,10 @@ def handle_request(
             return _skill_version(root, path_parts[1], path_parts[2])
         if method == "GET" and path_parts == ["memory"]:
             return _memory(root)
+        if method == "GET" and len(path_parts) == 3 and path_parts[:2] == ["agent", "runs"]:
+            return _agent_run_detail(root, path_parts[2])
+        if method == "GET" and len(path_parts) == 4 and path_parts[:2] == ["agent", "runs"] and path_parts[3] == "tool-calls":
+            return _agent_run_tool_calls(root, path_parts[2])
         if method == "GET" and path_parts == ["traces"]:
             return _traces(root)
         if method == "GET" and len(path_parts) == 2 and path_parts[0] == "traces":
@@ -107,6 +111,13 @@ def _chat(
         raise ValueError("POST /chat requires a non-empty JSON string field: message.")
     provider_selection = _optional_llm_client(payload, root)
     active_harness = harness or AgentHarness(project_root=root, llm_client=provider_selection.client)
+    agent_mode = _agent_mode(payload, query or {})
+    if agent_mode == "tool_calling":
+        result = active_harness.tool_chat(message)
+        response_payload = _debug_tool_chat_payload(result) if _wants_debug(payload, query or {}) else _compact_tool_chat_payload(result)
+        return _json(200, _with_provider_warnings(response_payload, provider_selection.warnings))
+    if agent_mode != "harness_workflow":
+        raise ValueError("agent_mode must be either harness_workflow or tool_calling.")
     result = active_harness.chat(message)
     if _wants_debug(payload, query or {}):
         response_payload = _debug_chat_payload(result)
@@ -355,6 +366,54 @@ def _trace_detail(root: Path, filename: str) -> WebResponse:
     return _json(200, _read_json(trace_path))
 
 
+def _agent_run_detail(root: Path, run_id: str) -> WebResponse:
+    trace = _find_agent_run_trace(root, run_id)
+    if trace is None:
+        return _json(404, {"error": f"Agent run not found: {run_id}"})
+    path, payload = trace
+    output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+    return _json(
+        200,
+        {
+            "run_id": run_id,
+            "agent_mode": output.get("agent_mode") or payload.get("agent_mode") or payload.get("type"),
+            "trace_file": path.name,
+            "trace_path": str(path),
+            "trace_url": _trace_url(path),
+            "type": payload.get("type"),
+            "created_at": payload.get("created_at"),
+            "output": output,
+            "run": payload.get("run"),
+            "hqs": output.get("response_hqs"),
+            "system_hqs": output.get("system_hqs") or payload.get("system_hqs"),
+            "stop_reason": output.get("stop_reason"),
+            "tool_call_timeline": _tool_call_timeline_from_trace(payload),
+        },
+    )
+
+
+def _agent_run_tool_calls(root: Path, run_id: str) -> WebResponse:
+    trace = _find_agent_run_trace(root, run_id)
+    if trace is None:
+        return _json(404, {"error": f"Agent run not found: {run_id}"})
+    path, payload = trace
+    output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+    timeline = _tool_call_timeline_from_trace(payload)
+    return _json(
+        200,
+        {
+            "run_id": run_id,
+            "trace_file": path.name,
+            "trace_url": _trace_url(path),
+            "tool_call_timeline": timeline,
+            "tool_call_count": len(timeline),
+            "parse_repair_count": output.get("parse_repair_count", _parse_repair_count_from_timeline(timeline)),
+            "invalid_call_count": output.get("invalid_call_count"),
+            "final_answer_source": output.get("final_answer_source"),
+        },
+    )
+
+
 def _hqs(root: Path) -> WebResponse:
     memory = MemoryManager(root, trace_updates=False)
     working = memory.get_working_memory()
@@ -580,11 +639,163 @@ def _compact_timeline(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return timeline
 
 
+def _find_agent_run_trace(root: Path, run_id: str) -> tuple[Path, dict[str, Any]] | None:
+    run_id = _safe_path_segment(run_id, "Run id")
+    traces_dir = root / "traces"
+    if not traces_dir.exists():
+        return None
+    for path in sorted(traces_dir.glob("*.json"), reverse=True):
+        try:
+            payload = _read_json(path)
+        except ValueError:
+            continue
+        if _trace_matches_run_id(payload, run_id):
+            return path, payload
+    return None
+
+
+def _trace_matches_run_id(payload: dict[str, Any], run_id: str) -> bool:
+    output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+    run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+    return run_id in {
+        str(output.get("run_id") or ""),
+        str(run.get("run_id") or ""),
+    }
+
+
+def _tool_call_timeline_from_trace(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+    existing = output.get("tool_call_timeline")
+    if isinstance(existing, list):
+        return [item for item in existing if isinstance(item, dict)]
+    steps = payload.get("steps") if isinstance(payload.get("steps"), list) else []
+    timeline = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        item = _tool_call_item_from_step(step)
+        if item is not None:
+            timeline.append(item)
+    return timeline
+
+
+def _tool_call_item_from_step(step: dict[str, Any]) -> dict[str, Any] | None:
+    decision = step.get("model_decision")
+    validation = step.get("validation")
+    observation = step.get("observation")
+    observation_summary = step.get("observation_summary")
+    tool_result = step.get("tool_result")
+    tool_name = step.get("tool_name")
+    arguments: Any = {}
+    decision_type = None
+    parse_repair = None
+    if isinstance(decision, dict):
+        decision_type = decision.get("type")
+        tool_name = decision.get("tool_name") or tool_name
+        arguments = decision.get("arguments") if isinstance(decision.get("arguments"), dict) else {}
+        parse_repair = decision.get("parse_metadata") if isinstance(decision.get("parse_metadata"), dict) else None
+    if not any(
+        isinstance(value, dict)
+        for value in [decision, validation, observation, observation_summary, tool_result]
+    ) and tool_name is None:
+        return None
+    validation_errors = []
+    if isinstance(validation, dict) and isinstance(validation.get("errors"), list):
+        validation_errors = validation["errors"]
+    return {
+        "name": step.get("name"),
+        "iteration": step.get("iteration"),
+        "status": step.get("status"),
+        "decision_type": decision_type,
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "model_decision": decision if isinstance(decision, dict) else None,
+        "validation": validation if isinstance(validation, dict) else None,
+        "validation_errors": validation_errors,
+        "parse_repair": parse_repair,
+        "observation": observation if isinstance(observation, dict) else None,
+        "observation_summary": observation_summary if isinstance(observation_summary, dict) else None,
+        "tool_result": tool_result if isinstance(tool_result, dict) else None,
+        "errors": step.get("errors") if isinstance(step.get("errors"), list) else [],
+    }
+
+
+def _parse_repair_count_from_timeline(timeline: list[dict[str, Any]]) -> int:
+    count = 0
+    for item in timeline:
+        metadata = item.get("parse_repair")
+        if isinstance(metadata, dict) and metadata.get("repaired") is True:
+            count += 1
+    return count
+
+
 def _wants_debug(payload: dict[str, Any], query: dict[str, list[str]]) -> bool:
     if payload.get("debug") is True or payload.get("include_debug") is True:
         return True
     values = query.get("debug", []) + query.get("include_debug", [])
     return any(value.lower() in {"1", "true", "yes"} for value in values)
+
+
+def _agent_mode(payload: dict[str, Any], query: dict[str, list[str]]) -> str:
+    raw = payload.get("agent_mode")
+    if not isinstance(raw, str):
+        values = query.get("agent_mode", [])
+        raw = values[0] if values else "harness_workflow"
+    normalized = raw.strip().lower().replace("-", "_")
+    if normalized in {"", "harness", "harness_workflow"}:
+        return "harness_workflow"
+    if normalized in {"tool_calling", "tool_calling_agent"}:
+        return "tool_calling"
+    return normalized
+
+
+def _compact_tool_chat_payload(result: Any) -> dict[str, Any]:
+    state = result.tool_calling.state
+    return {
+        "run_id": result.run.run_id,
+        "agent_mode": result.agent_mode,
+        "response": result.response,
+        "trace_path": str(result.trace_path),
+        "trace_file": Path(result.trace_path).name,
+        "trace_url": _trace_url(result.trace_path),
+        "hqs": result.hqs.to_dict(),
+        "system_hqs": result.system_hqs.to_dict(),
+        "tool_call_timeline": result.tool_call_timeline,
+        "parse_repair_count": result.parse_repair_count,
+        "invalid_call_count": result.invalid_call_count,
+        "final_answer_source": result.final_answer_source,
+        "hqs_gate": result.hqs_gate,
+        "quality_retry": result.quality_retry,
+        "tool_calling": {
+            "status": state.status,
+            "iteration": state.iteration,
+            "max_iterations": state.max_iterations,
+            "invalid_call_count": state.invalid_call_count,
+            "tool_error_count": state.tool_error_count,
+            "repeated_tool_call_count": state.repeated_tool_call_count,
+            "observations": state.observations,
+            "observation_summaries": state.observation_summaries,
+            "errors": state.errors,
+        },
+        "planner": result.planner_metadata,
+        "timeline": _compact_timeline(result.run.to_dict().get("steps", [])),
+        "memory_retrieval": result.memory_context.get("retrieval") if isinstance(result.memory_context, dict) else None,
+        "stop_reason": result.stop_reason,
+        "debug_url_hint": "POST /chat with {\"debug\": true, \"agent_mode\": \"tool_calling\"} for full payload.",
+    }
+
+
+def _debug_tool_chat_payload(result: Any) -> dict[str, Any]:
+    payload = result.to_dict()
+    payload["trace_file"] = Path(result.trace_path).name
+    payload["trace_url"] = _trace_url(result.trace_path)
+    payload["timeline"] = _compact_timeline(result.run.to_dict().get("steps", []))
+    payload["memory_retrieval"] = result.memory_context.get("retrieval") if isinstance(result.memory_context, dict) else None
+    payload["tool_call_timeline"] = result.tool_call_timeline
+    payload["parse_repair_count"] = result.parse_repair_count
+    payload["invalid_call_count"] = result.invalid_call_count
+    payload["final_answer_source"] = result.final_answer_source
+    return payload
 
 
 def _with_provider_warnings(payload: dict[str, Any], warnings: list[dict[str, str]]) -> dict[str, Any]:
