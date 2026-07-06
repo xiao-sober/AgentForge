@@ -27,9 +27,9 @@ def build_reflection_report(taskset: TaskSet, hqs_report: HQSReport) -> str:
     lines.extend(["", "## Strengths", ""])
     if strongest_dimensions:
         for dimension in strongest_dimensions:
-            lines.append(f"- {dimension} met the local MVP threshold.")
+            lines.append(f"- {dimension} met the local AgentForge threshold.")
     else:
-        lines.append("- No dimension reached the local MVP strength threshold.")
+        lines.append("- No dimension reached the local AgentForge strength threshold.")
 
     lines.extend(["", "## Weaknesses", ""])
     if weak_dimensions:

@@ -70,7 +70,7 @@ def build_response(
                 "",
                 "## Assumptions",
                 "",
-                "- This Phase 3 MVP uses local file memory and deterministic execution unless a provider is configured.",
+                "- AgentForge uses local file memory and deterministic execution unless a provider is configured.",
             ]
         ).rstrip() + "\n"
 

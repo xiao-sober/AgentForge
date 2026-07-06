@@ -1,35 +1,35 @@
-# Agent Run Modes: Local vs Provider, Harness Workflow vs Tool-Calling Agent
+# Agent 运行模式：本地 / Provider 与 Harness Workflow / Tool-Calling Agent
 
-This document explains the four runtime combinations used by AgentForge chat:
+本文说明 AgentForge 聊天流程中的四种运行组合：
 
-- Runtime backend: local deterministic mode or configured model provider mode.
-- Agent mode: `harness_workflow` or `tool_calling_agent`.
+- 运行后端：本地确定性逻辑，或 `config/providers.json` 中配置的大模型 provider。
+- Agent 模式：固定的 `harness_workflow`，或模型规划的 `tool_calling_agent`。
 
-The important distinction is:
+关键区别：
 
-- `use_provider` controls whether model-backed operations can call the configured LLM provider.
-- `agent_mode` controls who decides the next Agent step: fixed Harness workflow or model-planned tool calls.
+- `use_provider` 决定是否允许调用外部大模型 provider。
+- `agent_mode` 决定下一步由谁选择：固定 Harness workflow，还是 Tool-Calling Agent planner。
 
-## Quick Matrix
+## 快速对比
 
-| Runtime | Agent mode | Who chooses next step | Model role | Trace type | Best for |
+| 运行后端 | Agent 模式 | 谁选择下一步 | 模型角色 | Trace 类型 | 适合场景 |
 | --- | --- | --- | --- | --- | --- |
-| Local | `harness_workflow` | Harness fixed workflow | None, deterministic local logic | `agent_chat` | Baseline tests, offline development, deterministic debugging |
-| Provider | `harness_workflow` | Harness fixed workflow | Provider may generate/run/rewrite Skill content when a step needs model text | `agent_chat` | Stable production-like workflow with model-backed content |
-| Local | `tool_calling_agent` | Scripted local planner | None; fake/scripted planner emits tool decisions | `tool_calling_agent` | Testing tool-call policy, trace, UI timeline, and Harness controls without API calls |
-| Provider | `tool_calling_agent` | Provider planner proposes tool calls | Provider returns JSON decisions; Harness validates and executes tools | `tool_calling_agent` | Real tool-calling Agent behavior under Harness safety controls |
+| 本地 | `harness_workflow` | Harness 固定流程 | 无，使用确定性本地逻辑 | `agent_chat` | 基线测试、离线开发、确定性调试 |
+| Provider | `harness_workflow` | Harness 固定流程 | 某些需要文本生成的步骤可调用 provider | `agent_chat` | 稳定编排 + 模型内容生成 |
+| 本地 | `tool_calling_agent` | 脚本化本地 planner | 无，脚本 planner 按少量规则发出工具决策 | `tool_calling_agent` | 测试工具调用 policy、trace、memory、UI timeline 和 Harness 控制 |
+| Provider | `tool_calling_agent` | Provider planner 提出工具调用 | Provider 返回 JSON 决策，Harness 校验并执行工具 | `tool_calling_agent` | 真实模型驱动的工具规划验收 |
 
-## Two Independent Switches
+## 两个独立开关
 
 ### `use_provider`
 
-`use_provider: false` means local deterministic execution. No external model call is required.
+`use_provider: false` 表示本地确定性执行，不需要外部模型调用。
 
-`use_provider: true` means AgentForge creates the default configured provider client from `config/providers.json`. Secrets must stay in config or environment references and must not be hardcoded.
+`use_provider: true` 表示 AgentForge 会从 `config/providers.json` 创建默认 provider client。密钥必须放在本地配置或环境变量引用中，不能写死在代码里。
 
 ### `agent_mode`
 
-`agent_mode: "harness_workflow"` uses the deterministic Harness sequence:
+`agent_mode: "harness_workflow"` 使用确定性的 Harness 顺序：
 
 ```text
 receive_input
@@ -48,7 +48,7 @@ receive_input
 -> save_episode_memory
 ```
 
-`agent_mode: "tool_calling"` or `tool_calling_agent` uses a tool-call loop:
+`agent_mode: "tool_calling"` 或 `tool_calling_agent` 使用工具调用循环：
 
 ```text
 Harness setup
@@ -63,27 +63,29 @@ Harness setup
 -> Harness saves memory and trace
 ```
 
-## Mode Details
+API 入参使用 `tool_calling`；内部和响应里的规范模式名通常是 `tool_calling_agent`。CLI 使用 `--agent-mode tool-calling`。
 
-### 1. Local + `harness_workflow`
+## 模式详情
 
-This is the most deterministic mode.
+### 1. 本地 + `harness_workflow`
 
-Properties:
+这是最确定、最容易复现的模式。
 
-- No external provider is required.
-- The Harness decides every step in a fixed order.
-- Skill generation and Skill execution use local deterministic fallbacks where possible.
-- Trace type is `agent_chat`.
-- HQS, memory, trace writing, and reinforcement checks still run through Harness logic.
+特性：
 
-Use this when:
+- 不需要外部 provider。
+- Harness 按固定顺序决定所有步骤。
+- Skill 生成和 Skill 执行会尽量使用本地确定性回退逻辑。
+- Trace 类型是 `agent_chat`。
+- HQS、memory、trace 写入和 reinforcement check 仍由 Harness 执行。
 
-- You want a stable baseline.
-- You are debugging intent parsing, plan construction, memory, HQS, or trace shape.
-- You need tests that should not depend on provider availability.
+适合：
 
-Example API:
+- 建立稳定基线。
+- 调试 intent parsing、plan construction、memory、HQS 或 trace 结构。
+- 编写不依赖 provider 可用性的测试。
+
+API 示例：
 
 ```json
 {
@@ -93,7 +95,7 @@ Example API:
 }
 ```
 
-Example CLI:
+CLI 示例：
 
 ```bash
 agentforge agent-chat --input "Review dashboard layout readability." --json
@@ -101,23 +103,23 @@ agentforge agent-chat --input "Review dashboard layout readability." --json
 
 ### 2. Provider + `harness_workflow`
 
-This keeps the same fixed Harness workflow, but model-backed steps can call the provider.
+这个模式保留固定 Harness 编排，但在需要模型文本的步骤调用 provider。
 
-Properties:
+特性：
 
-- The Harness still decides step order.
-- The provider does not choose tools.
-- Provider may be used inside Skill generation, Skill execution, or rewrite flows.
-- Trace type is `agent_chat`.
-- This mode is more stable than provider tool-calling because the model only supplies content, not control flow.
+- 步骤顺序仍由 Harness 决定。
+- Provider 不选择工具，也不控制流程。
+- Provider 可用于 Skill 生成、Skill 执行或 rewrite 等内容生成步骤。
+- Trace 类型是 `agent_chat`。
+- 相比 provider tool-calling，这个模式更稳定，因为模型只提供内容，不控制下一步。
 
-Use this when:
+适合：
 
-- You want model quality for generated or executed Skill output.
-- You still want predictable orchestration.
-- You are comparing provider output quality without testing model-planned tool calls.
+- 希望使用模型提升生成或执行质量。
+- 仍然希望编排顺序可预测。
+- 对比 provider 输出质量，但暂时不测试模型规划工具调用。
 
-Example API:
+API 示例：
 
 ```json
 {
@@ -127,31 +129,37 @@ Example API:
 }
 ```
 
-Example CLI:
+CLI 示例：
 
 ```bash
 agentforge agent-chat --input "Generate a Skill for API response contract review." --use-provider --json
 ```
 
-### 3. Local + `tool_calling_agent`
+### 3. 本地 + `tool_calling_agent`
 
-This mode exercises the tool-calling architecture without calling a real model.
+这个模式用于在不调用真实模型的情况下验证工具调用架构。
 
-Properties:
+特性：
 
-- AgentForge uses a scripted local planner.
-- The scripted planner emits deterministic tool decisions.
-- Harness policy, state prerequisites, tool execution, observation summaries, final answer handling, and trace timeline are still exercised.
-- Trace type is `tool_calling_agent`.
-- `final_answer_source` is normally `harness_response` after `build_response` runs.
+- AgentForge 使用脚本化本地 planner。
+- planner 会根据已解析 intent 选择确定性的工具决策序列。
+- Harness 的 policy、状态前置条件、工具执行、observation 摘要、final answer 处理和 trace timeline 都会被覆盖。
+- Trace 类型是 `tool_calling_agent`。
+- `build_response` 运行后，`final_answer_source` 通常是 `harness_response`。
 
-Use this when:
+重要边界：
 
-- You are developing the tool-call loop.
-- You want to test Web timeline rendering.
-- You need deterministic coverage for policy failures, repeated calls, premature final answers, HQS gate, or trace shape.
+- 本地脚本 planner 不是通用意图感知模型。
+- 它只覆盖内置规则：普通 Skill 执行、trace inspection、memory query、Skill 生成和 direct response。
+- 因此，本地 `tool_calling_agent` 适合做 loop、policy、trace、memory 和 UI 冒烟测试；更开放的自然语言规划能力仍需要 provider 模式验收。
 
-Example API:
+适合：
+
+- 开发 tool-call loop。
+- 测试 Web tool-call timeline 展示。
+- 覆盖 policy failure、repeated calls、premature final answer、HQS gate、trace shape 等确定性场景。
+
+API 示例：
 
 ```json
 {
@@ -161,7 +169,7 @@ Example API:
 }
 ```
 
-Example CLI:
+CLI 示例：
 
 ```bash
 agentforge agent-chat --input "Inspect the latest trace." --agent-mode tool-calling --json
@@ -169,29 +177,29 @@ agentforge agent-chat --input "Inspect the latest trace." --agent-mode tool-call
 
 ### 4. Provider + `tool_calling_agent`
 
-This is the real Tool-Calling Agent mode.
+这是当前真正的 Tool-Calling Agent 模式。
 
-Properties:
+特性：
 
-- The provider receives the allowed tool schemas and compact observations.
-- The provider must return exactly one JSON decision:
+- Provider 接收允许调用的工具 schema 和压缩后的 observation。
+- Provider 必须返回一个 JSON 决策：
   - `tool_call`
   - `final_answer`
   - `cannot_continue`
-- AgentForge parses the decision and may do one bounded JSON repair retry if provider output is not valid JSON.
-- Harness validates tool name, argument schema, permission level, prerequisite state, repeated calls, invalid-call budget, and tool-error budget.
-- Harness executes tools and owns all high-impact operations.
-- Trace type is `tool_calling_agent`.
-- The final returned user response prefers the Harness `build_response` output. The model `final_answer` is treated as a completion signal when `state["response"]` exists.
+- 如果 provider 输出不是合法 JSON，AgentForge 最多做一次受控 JSON repair retry。
+- Harness 会校验工具名、参数 schema、权限级别、状态前置条件、重复调用、invalid-call 预算和 tool-error 预算。
+- Harness 执行工具，并拥有所有高影响系统动作。
+- Trace 类型是 `tool_calling_agent`。
+- 最终用户响应优先使用 Harness `build_response` 的输出；当 `state["response"]` 已存在时，模型的 `final_answer` 只作为完成信号。
 
-Use this when:
+适合：
 
-- You want the model to choose the next Agent tool.
-- You are validating real provider JSON stability.
-- You need inspectable tool-call timelines and observations.
-- You are testing trace inspection or memory query behavior through provider-planned tool calls.
+- 验证模型是否能选择下一步 Agent 工具。
+- 验证 DeepSeek / DashScope 等 provider 的 JSON 稳定性。
+- 检查 tool-call timeline、arguments、validation errors 和 observations。
+- 验收 trace inspection、memory query、Skill 生成类请求的真实规划行为。
 
-Example API:
+API 示例：
 
 ```json
 {
@@ -201,7 +209,7 @@ Example API:
 }
 ```
 
-Example CLI:
+CLI 示例：
 
 ```bash
 agentforge agent-chat \
@@ -211,7 +219,7 @@ agentforge agent-chat \
   --json
 ```
 
-Use `--debug` when you need full internals:
+需要查看完整内部状态时使用 `--debug`：
 
 ```bash
 agentforge agent-chat \
@@ -222,11 +230,11 @@ agentforge agent-chat \
   --debug
 ```
 
-## Model-Callable vs Harness-Only Tools
+## 模型可调用工具与 Harness-only 工具
 
-In `tool_calling_agent`, the model sees only a bounded tool set.
+在 `tool_calling_agent` 中，模型只能看到有限工具集。
 
-Model-callable tools:
+模型可调用工具：
 
 - `retrieve_memory_context`
 - `inspect_latest_trace`
@@ -237,7 +245,7 @@ Model-callable tools:
 - `build_response`
 - `evaluate_response_hqs`
 
-Harness-only tools:
+Harness-only 工具：
 
 - `receive_input`
 - `update_semantic_memory`
@@ -247,15 +255,15 @@ Harness-only tools:
 - `reinforcement_check`
 - `save_episode_memory`
 
-Reason:
+原因：
 
-- Memory writes, HQS gates, retries, reflection, reinforcement, and episode persistence affect system state. They stay Harness-controlled.
+- memory 写入、HQS gate、retry、reflection、reinforcement 和 episode persistence 会影响系统状态，必须由 Harness 控制。
 
-## Response and Trace Differences
+## 响应和 Trace 差异
 
 ### `harness_workflow`
 
-Compact `/chat` payload includes:
+精简 `/chat` payload 包含：
 
 - `run_id`
 - `response`
@@ -277,7 +285,7 @@ Compact `/chat` payload includes:
 
 ### `tool_calling_agent`
 
-Compact `/chat` payload also includes:
+精简 `/chat` payload 会额外包含：
 
 - `agent_mode`
 - `tool_call_timeline`
@@ -288,33 +296,34 @@ Compact `/chat` payload also includes:
 - `quality_retry`
 - `tool_calling`
 
-`final_answer_source` values:
+`final_answer_source` 的含义：
 
-- `harness_response`: `build_response` produced the user-facing response. This is the normal successful path.
-- `model_final_answer`: no Harness response existed, so the model final answer or fallback stop message was used.
+- `harness_response`：`build_response` 已经生成用户响应。这是正常成功路径。
+- `model_final_answer`：没有 Harness response，只能使用模型 final answer 或回退停止消息。
 
-## Safety and Stop Conditions
+## 安全控制和停止条件
 
-`tool_calling_agent` has additional controls:
+`tool_calling_agent` 额外包含这些保护：
 
-- Max iterations.
-- Invalid decision budget.
-- Tool error budget.
-- Repeated identical tool-call detector.
-- Same-tool guard for repeated memory retrieval.
-- Premature `final_answer` guard before `build_response`.
-- One controlled HQS retry after final answer if quality is low.
-- Provider JSON repair retry limited to one repair prompt.
+- 最大迭代次数。
+- invalid decision 预算。
+- tool error 预算。
+- 连续相同 `tool_name + arguments` 的重复调用检测。
+- memory retrieval 等同类工具的重复调用保护。
+- `build_response` 前过早 `final_answer` 保护。
+- final answer 后的 HQS gate。
+- 低 HQS 时最多一次受控 response retry。
+- provider JSON repair retry 最多一次。
 
-`harness_workflow` is safer by construction because the model does not choose tools or control flow.
+`harness_workflow` 天然更保守，因为模型不选择工具，也不控制流程。
 
-## Practical Recommendation
+## 使用建议
 
-Use this order when debugging:
+调试时建议按这个顺序推进：
 
-1. Local + `harness_workflow` for baseline behavior.
-2. Provider + `harness_workflow` for model content quality.
-3. Local + `tool_calling_agent` for tool-call policy and UI timeline.
-4. Provider + `tool_calling_agent` for real autonomous tool planning validation.
+1. 本地 + `harness_workflow`：验证基线行为。
+2. Provider + `harness_workflow`：验证模型生成内容质量。
+3. 本地 + `tool_calling_agent`：验证工具调用 policy 和 UI timeline。
+4. Provider + `tool_calling_agent`：验收真实模型的自主工具规划。
 
-For day-to-day development, keep local deterministic modes green first. Use provider-backed `tool_calling_agent` as an acceptance test, not as the only debugging path.
+日常开发应先保持本地确定性模式稳定。接入 provider 的 `tool_calling_agent` 更适合作为验收测试，不应该成为唯一调试路径。

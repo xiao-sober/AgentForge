@@ -58,22 +58,17 @@ class ProviderModelPlanner:
 class ScriptedModelPlanner:
     decisions: list[ToolDecision | dict[str, Any] | str] = field(default_factory=list)
     index: int = 0
+    auto_route: bool = False
+    route: str = "custom"
 
     @classmethod
     def default(cls) -> "ScriptedModelPlanner":
-        return cls(
-            decisions=[
-                ToolDecision.tool_call("retrieve_memory_context", {}),
-                ToolDecision.tool_call("select_skill", {}),
-                ToolDecision.tool_call("build_plan", {}),
-                ToolDecision.tool_call("execute_plan", {}),
-                ToolDecision.tool_call("observe_execution", {}),
-                ToolDecision.tool_call("build_response", {}),
-                ToolDecision.tool_call("evaluate_response_hqs", {}),
-            ]
-        )
+        return cls(auto_route=True, route="auto")
 
     def decide(self, state: Any, runtime_state: dict[str, Any] | None = None) -> ToolDecision:
+        if self.auto_route and self.index == 0 and not self.decisions:
+            self.route = _scripted_route_name(state, runtime_state)
+            self.decisions = _scripted_route_decisions(self.route)
         if self.index < len(self.decisions):
             decision = self.decisions[self.index]
             self.index += 1
@@ -84,7 +79,12 @@ class ScriptedModelPlanner:
         return ToolDecision.final_answer(response or "AgentForge tool-calling run completed.")
 
     def metadata(self) -> dict[str, Any]:
-        return {"planner": "scripted", "remaining_decisions": max(0, len(self.decisions) - self.index)}
+        return {
+            "planner": "scripted",
+            "route": self.route,
+            "auto_route": self.auto_route,
+            "remaining_decisions": max(0, len(self.decisions) - self.index),
+        }
 
 
 def _coerce_decision(value: ToolDecision | dict[str, Any] | str) -> ToolDecision:
@@ -93,3 +93,68 @@ def _coerce_decision(value: ToolDecision | dict[str, Any] | str) -> ToolDecision
     if isinstance(value, dict):
         return parse_model_decision(json.dumps(value, ensure_ascii=False))
     return parse_model_decision(value)
+
+
+def _scripted_route_name(state: Any, runtime_state: dict[str, Any] | None) -> str:
+    intent_type = ""
+    if runtime_state and runtime_state.get("intent") is not None:
+        intent = runtime_state["intent"]
+        intent_type = str(getattr(intent, "intent_type", "") or "")
+    user_input = str(getattr(state, "user_input", "") or "")
+    lowered = user_input.lower()
+
+    if intent_type == "inspect_traces" or "trace" in lowered or "日志" in user_input or "轨迹" in user_input:
+        return "trace_inspection"
+    if intent_type == "query_memory" or "memory" in lowered or "memories" in lowered or "记忆" in user_input:
+        return "memory_query"
+    if intent_type == "generate_skill":
+        return "skill_generation"
+    if intent_type in {"chat", "inspect_skills", "empty"}:
+        return "direct_response"
+    return "skill_execution"
+
+
+def _scripted_route_decisions(route: str) -> list[ToolDecision]:
+    if route == "trace_inspection":
+        return [
+            ToolDecision.tool_call("retrieve_memory_context", {}),
+            ToolDecision.tool_call("inspect_latest_trace", {}),
+            ToolDecision.tool_call("build_plan", {}),
+            ToolDecision.tool_call("execute_plan", {}),
+            ToolDecision.tool_call("build_response", {}),
+            ToolDecision.tool_call("evaluate_response_hqs", {}),
+        ]
+    if route == "memory_query":
+        return [
+            ToolDecision.tool_call("retrieve_memory_context", {}),
+            ToolDecision.tool_call("build_plan", {}),
+            ToolDecision.tool_call("execute_plan", {}),
+            ToolDecision.tool_call("build_response", {}),
+            ToolDecision.tool_call("evaluate_response_hqs", {}),
+        ]
+    if route == "skill_generation":
+        return [
+            ToolDecision.tool_call("retrieve_memory_context", {}),
+            ToolDecision.tool_call("build_plan", {}),
+            ToolDecision.tool_call("execute_plan", {}),
+            ToolDecision.tool_call("observe_execution", {}),
+            ToolDecision.tool_call("build_response", {}),
+            ToolDecision.tool_call("evaluate_response_hqs", {}),
+        ]
+    if route == "direct_response":
+        return [
+            ToolDecision.tool_call("retrieve_memory_context", {}),
+            ToolDecision.tool_call("build_plan", {}),
+            ToolDecision.tool_call("execute_plan", {}),
+            ToolDecision.tool_call("build_response", {}),
+            ToolDecision.tool_call("evaluate_response_hqs", {}),
+        ]
+    return [
+        ToolDecision.tool_call("retrieve_memory_context", {}),
+        ToolDecision.tool_call("select_skill", {}),
+        ToolDecision.tool_call("build_plan", {}),
+        ToolDecision.tool_call("execute_plan", {}),
+        ToolDecision.tool_call("observe_execution", {}),
+        ToolDecision.tool_call("build_response", {}),
+        ToolDecision.tool_call("evaluate_response_hqs", {}),
+    ]

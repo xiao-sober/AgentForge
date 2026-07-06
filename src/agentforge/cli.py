@@ -141,7 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evolve.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
 
-    serve = subparsers.add_parser("serve", help="Start the Phase 3 local JSON API server.")
+    serve = subparsers.add_parser(
+        "serve",
+        help="Start the local AgentForge JSON API server and Web workbench.",
+        description="Start the local AgentForge JSON API server and Web workbench.",
+    )
     serve.add_argument("--project-root", type=Path, default=Path.cwd(), help="Project root for local artifacts.")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host.")
     serve.add_argument("--port", type=int, default=8765, help="Bind port.")

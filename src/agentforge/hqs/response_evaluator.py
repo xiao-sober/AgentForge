@@ -229,7 +229,7 @@ def _rationale(dimension: str, score: float) -> str:
     if score >= 4.5:
         return f"{dimension} is strong for the local evidence."
     if score >= 3.0:
-        return f"{dimension} is acceptable for the MVP loop."
+        return f"{dimension} is acceptable for the local Agent loop."
     if score > 0:
         return f"{dimension} is weak and should trigger reinforcement review."
     return f"{dimension} could not be evaluated because the response was empty."

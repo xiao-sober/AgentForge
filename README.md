@@ -1,146 +1,304 @@
 # AgentForge
 
-AgentForge is a local-first Agent system for building, running, evaluating, and improving reusable Markdown Skills.
+AgentForge 是一个本地优先的 Agent Harness，用来创建、运行、评估和改进可复用的 Markdown Skill。
 
-It is designed for transparent local development: Skills are files, runs are inspectable directories, traces are JSON, memory is JSON/JSONL, and model providers are optional adapters configured outside the code.
+它面向可观察、可调试的本地 Agent 开发：
 
-## What It Does
+- Skill 使用 Markdown 文件保存。
+- 运行结果写入本地 `runs/`。
+- Trace 使用 JSON 文件保存。
+- Memory 使用 JSON / JSONL 保存。
+- 大模型 provider 是可选适配器，通过本地配置接入，不写死在代码里。
 
-- Generates valid versioned `SKILL.md` files from requirements.
-- Runs Skills against single inputs or task sets.
-- Scores outputs with deterministic HQS diagnostics.
-- Reflects on weak results and writes next Skill versions without overwriting old ones.
-- Exposes a local JSON chat API backed by an Agent harness.
-- Tracks each chat as an `AgentRun` with step timeline, reflection, and stop reason.
-- Stores three-layer local memory.
-- Writes readable traces for important actions.
-- Provides health, config, trace inspection, and artifact cleanup commands.
+AgentForge 不是托管平台，也不包含云部署、RBAC、计费、插件市场或分布式任务队列。
 
-## Status
+## 核心能力
 
-Current status: observable Harness Agent MVP with production-hardening basics.
+- 根据需求生成带版本的 `SKILL.md`。
+- 对单条输入或任务集运行 Skill。
+- 通过有限轮评估和重写演进 Skill。
+- 使用确定性的 Harness workflow 运行聊天。
+- 使用 Tool-Calling Agent loop 运行模型可见的工具调用流程。
+- 在本地保存 working、episodic、semantic 三层 memory。
+- 使用 HQS 对响应、Skill 和系统行为评分。
+- 为 Skill 生成、执行、演进、聊天、memory、HQS 写入可读 trace。
+- 提供本地 Web 工作台和 JSON API。
 
-Implemented:
+## 核心架构
 
-- Skill generation
-- Skill execution
-- Skill evolution
-- Agent harness run loop with local ToolRegistry
-- Tool-calling Agent loop MVP with model-visible tool schemas, decision parsing, policy checks, and trace recording
-- State-driven Planner/Executor for multi-step Skill execution
-- JSON Web/API MVP and local Web workbench
-- Local memory with retrieval scores and match reasons
-- Skill, response, and system HQS
-- Skill evolution quality gate
-- Trace schema validation and inspection
-- Provider output normalization and fail-fast provider errors
-- Artifact retention cleanup
-- Sample Skill and task set
+```text
+用户请求
+  -> Agent Harness
+  -> Intent parser
+  -> Memory retrieval
+  -> Skill selection / Skill generation
+  -> Planner
+  -> Executor
+  -> Response builder
+  -> HQS evaluation
+  -> Trace and memory write
+```
 
-Not implemented:
+## 运行模式
 
-- Multi-agent orchestration
-- Hosted/cloud deployment
-- Enterprise auth/RBAC
-- Vector database dependency
-- Visual workflow builder
+聊天流程有两个独立开关：
 
-## Install
+- `use_provider`：是否调用 `config/providers.json` 中配置的大模型 provider。
+- `agent_mode`：使用固定 Harness workflow，还是使用 Tool-Calling Agent loop。
 
-Use Python 3.10 or newer.
+| 运行后端 | Agent 模式 | 说明 |
+| --- | --- | --- |
+| 本地 | `harness_workflow` | 完全确定性的基线模式，Harness 决定每一步。 |
+| Provider | `harness_workflow` | 步骤顺序仍由 Harness 决定，需要模型文本时才调用 provider。 |
+| 本地 | `tool_calling_agent` | 使用带少量规则路由的脚本化 planner 跑工具调用链路，不调用外部 API。适合测试 policy、trace、memory 和 UI timeline；泛化规划能力仍应由 provider 模式验收。 |
+| Provider | `tool_calling_agent` | 真实 provider 返回 JSON 工具决策，Harness 负责校验和执行。 |
+
+更完整的模式对比见：[docs/agent_run_modes.md](docs/agent_run_modes.md)。
+
+## Tool-Calling Agent
+
+Tool-Calling Agent 会向 planner 暴露有限工具集：
+
+- `retrieve_memory_context`
+- `inspect_latest_trace`
+- `select_skill`
+- `build_plan`
+- `execute_plan`
+- `observe_execution`
+- `build_response`
+- `evaluate_response_hqs`
+
+planner 每次只能返回一个 JSON 决策：
+
+```json
+{"type":"tool_call","tool_name":"select_skill","arguments":{}}
+```
+
+或：
+
+```json
+{"type":"final_answer","content":"..."}
+```
+
+或：
+
+```json
+{"type":"cannot_continue","reason":"...","needed_input":["..."]}
+```
+
+以下高影响动作始终由 Harness 控制，不交给模型直接执行：
+
+- memory 写入
+- HQS gate
+- retry / replan
+- reflection
+- reinforcement
+- episode persistence
+
+当前本地 AgentForge 范围内，`docs/tool_calling_agent_goal.md` 记录的 Tool-Calling Agent 目标已经完成。
+
+## 环境要求
+
+- Python 3.10 或更新版本
+- Windows、macOS 或 Linux
+- 可选：`uv`
+- 可选：用于 provider 模式的大模型 API key
+
+本地确定性模式不需要数据库或外部服务。
+
+## 安装
+
+使用 `uv`：
 
 ```bash
 uv venv .venv
 uv pip install --python .venv\Scripts\python.exe -e ".[dev]"
 ```
 
-Run tests:
+使用标准 `pip`：
+
+```bash
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+Linux / macOS 下把 `.venv\Scripts\python.exe` 替换为 `.venv/bin/python`。
+
+运行测试：
 
 ```bash
 .venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-## Quick Start
+## 本地启动
 
-Start the local API:
-
-```bash
-python -m agentforge serve --host 127.0.0.1 --port 8765
-```
-
-Send a chat message:
+启动本地服务：
 
 ```bash
-curl -X POST http://127.0.0.1:8765/chat ^
-  -H "Content-Type: application/json" ^
-  -d "{\"message\":\"Review this dashboard layout for readability.\"}"
+agentforge serve --host 127.0.0.1 --port 8765
 ```
 
-Open the Web console:
+打开 Web 工作台：
 
 ```text
 http://127.0.0.1:8765/
 ```
 
-The console supports:
-
-- Chat
-- Generate Skill
-- Run Skill
-- Evolve Skill
-- Model-call toggle using the default provider config
-- Chinese UI by default, with English/Chinese switching
-- Agent run timeline
-- Trace, HQS, memory retrieval, and Skill diff drill-down views
-- Artifact and warning panels
-- Trace/debug JSON inspection
-
-Check local health and config:
+检查本地配置：
 
 ```bash
-python -m agentforge check-config
+agentforge check-config
 ```
 
-Generate a Skill locally:
+查看包含 provider、真实 provider 测试门禁和密钥脱敏信息的 JSON 报告：
 
 ```bash
-python -m agentforge generate-skill --local-only --input "Create a UI review Skill"
+agentforge check-config --json
 ```
 
-Run a Skill:
+如果 shell 找不到 `agentforge` 命令，可以使用：
 
 ```bash
-python -m agentforge run-skill ^
-  --skill skills/ui_review_skill/v1/SKILL.md ^
+python -m agentforge serve --host 127.0.0.1 --port 8765
+```
+
+## 快速使用
+
+### 本地 Harness 聊天
+
+```bash
+agentforge agent-chat ^
+  --input "Review this dashboard layout for readability." ^
+  --json
+```
+
+### 本地 Tool-Calling loop 冒烟测试
+
+本地 `tool_calling_agent` 使用脚本化 planner，内置少量规则路由，可覆盖普通执行、trace inspection、memory query 和 Skill 生成类冒烟场景。它主要用于验证工具调用链路、policy、trace 和 Web timeline；更开放的自然语言规划仍应使用 provider 模式验收。
+
+```bash
+agentforge agent-chat ^
+  --input "Inspect the latest trace." ^
+  --agent-mode tool-calling ^
+  --json
+```
+
+### Provider Tool-Calling Agent
+
+真实 trace inspection、memory query、Skill 生成类请求应使用接入 provider 的 `tool_calling_agent` 验收：
+
+```bash
+agentforge agent-chat ^
+  --input "Inspect the latest trace and summarize errors." ^
+  --use-provider ^
+  --agent-mode tool-calling ^
+  --json
+```
+
+需要完整调试 payload 时增加 `--debug`：
+
+```bash
+agentforge agent-chat ^
+  --input "What useful memory do you have about recent provider dry runs?" ^
+  --use-provider ^
+  --agent-mode tool-calling ^
+  --json ^
+  --debug
+```
+
+### 生成 Skill
+
+```bash
+agentforge generate-skill ^
+  --local-only ^
+  --input "Create a UI review Skill"
+```
+
+该命令会生成类似 `skills/ui_review_skill/v1/SKILL.md` 的本地 Skill。
+
+### 运行示例 Skill
+
+全新克隆仓库后，可直接运行的示例 Skill 位于 `examples/skills/`：
+
+```bash
+agentforge run-skill ^
+  --skill examples/skills/ui_review_skill/v1/SKILL.md ^
   --input "Review this dashboard layout for hierarchy and readability."
 ```
 
-Evolve a Skill:
+### 演进 Skill
+
+Skill 演进会写入下一个版本，建议对 `skills/` 下的生成 Skill 使用。全新克隆仓库后还没有 `skills/ui_review_skill/v1/SKILL.md`，请先运行上面的 `generate-skill` 示例；下面的命令假设已经生成了该 Skill。
 
 ```bash
-python -m agentforge evolve-skill ^
+agentforge evolve-skill ^
   --skill skills/ui_review_skill/v1/SKILL.md ^
   --taskset tasksets/sample_ui_review_basic.json ^
   --max-iterations 1
 ```
 
-Inspect a trace:
+### 查看 Trace
 
 ```bash
-python -m agentforge inspect-trace traces\<trace-file>.json
+agentforge inspect-trace traces\<trace-file>.json
 ```
 
-Preview cleanup:
+### 清理旧产物
+
+预览清理范围：
 
 ```bash
-python -m agentforge cleanup-artifacts --max-traces 200 --max-runs-per-skill-version 20
+agentforge cleanup-artifacts --max-traces 200 --max-runs-per-skill-version 20
 ```
 
-Add `--delete` only when you want to remove old trace files and run directories.
+执行删除：
 
-## API
+```bash
+agentforge cleanup-artifacts --max-traces 200 --max-runs-per-skill-version 20 --delete
+```
 
-The Web/API MVP uses Python standard library HTTP and returns JSON.
+## 大模型 Provider 配置
+
+Provider 配置是可选的。没有 `config/providers.json` 时，AgentForge 使用本地确定性逻辑。
+
+从示例文件创建本地配置：
+
+```bash
+copy config\providers.example.json config\providers.json
+```
+
+`config/providers.json` 已被 `.gitignore` 忽略。
+
+配置结构示例：
+
+```json
+{
+  "default_provider": "deepseek_v4_pro",
+  "providers": {
+    "deepseek_v4_pro": {
+      "type": "openai_compatible",
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-pro",
+      "timeout_seconds": 300,
+      "temperature": 0.2,
+      "max_tokens": 8192
+    }
+  }
+}
+```
+
+当前支持的适配器类型：
+
+- `openai_compatible`
+
+Provider 调用走兼容 `/chat/completions` 的 API。API key 必须放在 `config/providers.json`，或通过其中的 `api_key_env` 引用环境变量，不要写死在源码里。
+
+## Web / API
+
+本地服务使用 Python 标准库 HTTP server，返回 JSON。
+
+主要路由：
 
 ```text
 GET  /health
@@ -162,175 +320,69 @@ GET  /traces/<traceFileName>
 GET  /hqs
 ```
 
-`POST /chat` defaults to the deterministic harness workflow. Send `agent_mode: "tool_calling"` to run the Tool-Calling Agent MVP. The tool-calling mode exposes only the bounded model-callable tool set, validates every model decision through policy, and writes a `tool_calling_agent` trace.
-
-`POST /chat` returns:
-
-- `run_id`
-- `response`
-- `trace_path`
-- `trace_url`
-- `hqs`
-- `system_hqs`
-- `intent`
-- `plan`
-- `execution_state`
-- `plan_step_results`
-- `memory_retrieval`
-- `selected_skill`
-- `artifacts`
-- `timeline`
-- `reflection`
-- `stop_reason`
-- `reinforcement`
-
-Tool-calling compact responses also include `tool_call_timeline`, `parse_repair_count`, `invalid_call_count`, `final_answer_source`, `hqs_gate`, and `quality_retry`. `final_answer_source` is `harness_response` when a Harness `build_response` result exists; the model final answer is treated as a completion signal.
-
-By default, `/chat` returns a compact payload for UI use. Send `{"debug": true}` or call `/chat?debug=1` to receive the full execution payload, including the full `run` object, execution result, memory context, and per-step inputs/outputs.
-
-`GET /agent/runs/<runId>` resolves the local trace for a run and returns run output, HQS, stop reason, and tool-call timeline. `GET /agent/runs/<runId>/tool-calls` returns the timeline only, including model decisions, arguments, validation errors, observation summaries, and parse repair metadata when present.
-
-`GET /skills/<skillName>/<version>` returns the Skill Markdown, metadata, and `diff.patch` text when the version has an evolution diff.
-
-`POST /chat`, `POST /skills/generate`, `POST /skills/run`, and `POST /skills/evolve` accept `use_provider: true` when you want to call the default configured model provider.
-
-Web/API path inputs are constrained to project-local artifact folders:
-
-- Skills: `skills/` or `examples/skills/`
-- Task sets: `tasksets/`
-- Traces: `traces/`
-- Provider config: `config/providers.json`
-
-Provider overrides are CLI-only. The Web/API uses the default provider config and falls back to local mode when provider setup or provider calls fail.
-
-`GET /config` redacts secrets and does not return API keys.
-
-## CLI Commands
-
-```text
-agentforge generate-skill
-agentforge validate-skill
-agentforge run-skill
-agentforge agent-chat
-agentforge evolve-skill
-agentforge serve
-agentforge check-config
-agentforge inspect-trace
-agentforge cleanup-artifacts
-```
-
-Use `--help` on any command for arguments.
-
-### CLI Input on Windows and Linux
-
-For short ASCII input, `--input` is fine. For Chinese text, multiline prompts, or complex JSON, prefer `--input-file` or `--stdin`.
-
-Windows PowerShell is fragile with quoted JSON and may write UTF-8 files with BOM. AgentForge task set loading accepts UTF-8 BOM, but stdin still depends on the console encoding. Use UTF-8 before piping Chinese text:
-
-```powershell
-$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
-$env:PYTHONUTF8 = "1"
-
-Get-Content -Raw -Encoding UTF8 .\requirement.txt |
-  python -m agentforge generate-skill --stdin --local-only
-
-Get-Content -Raw -Encoding UTF8 .\tasksets\api_review.json |
-  python -m agentforge evolve-skill --skill .\skills\api_design_skill\v1\SKILL.md --stdin --max-iterations 1
-```
-
-Linux and macOS shells usually handle UTF-8 and single-quoted JSON more predictably, but stdin is still the safest option for large input:
+示例请求：
 
 ```bash
-python -m agentforge generate-skill --stdin --local-only < requirement.txt
-python -m agentforge evolve-skill --skill skills/api_design_skill/v1/SKILL.md --stdin --max-iterations 1 < tasksets/api_review.json
+curl -X POST http://127.0.0.1:8765/chat ^
+  -H "Content-Type: application/json" ^
+  -d "{\"message\":\"Review dashboard layout readability.\",\"agent_mode\":\"tool_calling\",\"use_provider\":false}"
 ```
 
-`generate-skill --stdin` reads requirement text, `run-skill --stdin` reads one task input, and `evolve-skill --stdin` reads a JSON task set. Use `--taskset-format yaml` only when PyYAML is installed.
-
-## Model Providers
-
-Provider config is optional. Without it, AgentForge uses deterministic local generation and execution.
-
-Create local provider config:
-
-```bash
-copy config\providers.example.json config\providers.json
-```
-
-`config/providers.json` is ignored by git and must not be committed.
-
-Provider calls go through adapters. The current adapter is `openai_compatible`, which expects a `/chat/completions` API.
-
-Example shape:
+`POST /chat` 默认值：
 
 ```json
 {
-  "default_provider": "dashscope",
-  "providers": {
-    "dashscope": {
-      "type": "openai_compatible",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "api_key": "your-api-key",
-      "model": "qwen3.7-plus",
-      "timeout_seconds": 180,
-      "temperature": 0.2,
-      "max_tokens": 2500
-    },
-    "deepseek_v4_pro": {
-      "type": "openai_compatible",
-      "base_url": "https://api.deepseek.com",
-      "api_key_env": "DEEPSEEK_API_KEY",
-      "model": "deepseek-v4-pro",
-      "timeout_seconds": 300,
-      "temperature": 0.2,
-      "max_tokens": 8192,
-      "thinking_mode": {
-        "enabled": true,
-        "provider": "deepseek",
-        "reasoning_effort": "high"
-      }
-    }
-  }
+  "agent_mode": "harness_workflow",
+  "use_provider": false
 }
 ```
 
-If a provider is explicitly enabled and the model call times out or fails, AgentForge stops that provider-backed action and records the failure. It does not silently switch to deterministic local execution. Use `--local-only` or omit `--use-provider` when you intentionally want deterministic local behavior.
+需要完整 payload 时传入：
 
-When `thinking_mode.enabled` is true and `timeout_seconds` is omitted, AgentForge defaults the provider timeout to 180 seconds. Non-thinking providers still default to 60 seconds. DeepSeek V4 uses the official `https://api.deepseek.com` base URL and `deepseek-v4-pro` model ID; AgentForge sends DeepSeek thinking mode with `thinking: {"type": "enabled"}` and optional `reasoning_effort`.
-
-Provider-backed Skill runs must satisfy the AgentForge output contract:
-
-```md
-# Skill Run Output
-
-## Task
-
-## Applied Skill
-
-## Result
-
-## Assumptions and Gaps
+```json
+{"debug": true}
 ```
 
-When provider output is non-empty but does not match the contract, AgentForge wraps it in the required structure without discarding the raw content. The output contract report is stored with each task output.
+Tool-calling 的精简 payload 会额外包含：
 
-## Core Concepts
+- `tool_call_timeline`
+- `parse_repair_count`
+- `invalid_call_count`
+- `final_answer_source`
+- `hqs_gate`
+- `quality_retry`
 
-**Skill**
+`GET /config` 会隐藏密钥，不返回 API key 明文。
 
-A reusable Markdown instruction file saved as:
+## Web 工作台
+
+Web 工作台支持：
+
+- Chat
+- Skill 生成
+- Skill 执行
+- Skill 演进
+- 本地 / provider 模式切换
+- `harness_workflow` / `tool_calling_agent` 模式选择
+- run timeline
+- tool-call timeline
+- trace、HQS、memory、Skill diff 下钻
+- debug JSON 查看
+- 中文和英文 UI 切换
+
+## 本地产物
+
+AgentForge 会在项目根目录写入这些本地产物：
 
 ```text
-skills/<skill_slug>/<version>/SKILL.md
+skills/                 生成的版本化 Skills
+runs/                   Skill 执行输出
+traces/                 JSON traces
+data/memory/            working、episodic、semantic memory
+config/providers.json   本地 provider 配置，已 git-ignore
 ```
 
-Every Skill version is preserved. New versions are written as `v1`, `v2`, `v3`, and so on.
-
-**Trace**
-
-A JSON record of important system activity, saved under `traces/`.
-
-Trace types include:
+重要 trace 类型：
 
 - `skill_generation`
 - `skill_execution`
@@ -339,271 +391,55 @@ Trace types include:
 - `agent_chat`
 - `tool_calling_agent`
 - `memory_update`
+- `hqs_diagnosis`
 
-**Agent Run**
-
-Each `/chat` request creates an `AgentRun` with:
-
-- `run_id`
-- step timeline
-- registered tool calls
-- phase history
-- response-level HQS
-- HQS gate decision
-- reflection recommendation
-- stop reason
-
-Typical steps include intent parsing, memory retrieval, Skill selection, planning, execution, observation, response building, HQS evaluation, HQS gate, reflection, reinforcement check, memory save, and trace write.
-
-The harness uses a local `ToolRegistry` and `AgentRunLoop` to execute steps. Each registered tool declares input schema, output schema, known error types, permission level, idempotency, and optional timeout metadata. Tool inputs and outputs are validated before they are recorded in the run timeline.
-
-The Tool-Calling Agent mode adds a model decision loop around the same registry. Harness-only setup still receives input and parses intent first. The model then sees a reduced tool schema list and must return one JSON decision: `tool_call`, `final_answer`, or `cannot_continue`. AgentForge validates the tool name, arguments, permission level, prerequisite state, invalid-call budget, and tool-error budget before executing anything. Persistent memory writes and final HQS evaluation remain Harness-controlled.
-
-**Planner and Executor**
-
-Planner v2 decomposes complex Skill tasks into ordered subtasks with:
-
-- stable `step_id`
-- `depends_on`
-- `tool_input`
-- expected output metadata
-- required/optional step flags
-- max retry metadata
-- stop conditions
-
-The Executor is state-driven. It advances executable plan steps from `pending` to `running`, then to `completed`, `completed_with_warnings`, `failed`, or `skipped`. Dependency failures propagate to dependent steps as `skipped`. Provider-backed failures are blocking errors; local deterministic mode remains available only when selected intentionally. Multi-step Skill tasks are run as separate Skill executions, so the final execution result can contain both the compatibility `run_result` and the full `run_results` list.
-
-Execution state is exposed as:
-
-- `execution_state.status`
-- `execution_state.step_statuses`
-- `execution_state.completed_steps`
-- `execution_state.failed_steps`
-- `execution_state.skipped_steps`
-- `execution_state.transitions`
-
-The `agent_chat` trace also records the execution state and plan step results for inspection.
-
-If the response HQS gate is triggered, the loop records a `replan_response` step, rebuilds the response once, evaluates HQS again, then moves to reflection or reinforcement. Reinforcement only runs when an explicit task set is configured. It is bounded by `max_iterations`, writes a Skill evolution trace, rejects regressions through the existing HQS gate, and writes the reinforcement result back to semantic memory.
-
-Skill evolution also applies a candidate quality gate. A rewritten Skill can be rejected when it regresses average HQS, fails minimum improvement, worsens a task score, or regresses critical dimensions such as task completion, instruction following, output structure, or risk control.
-
-**HQS**
-
-Health and Quality Score. Scores use `0-5` dimensions and average them.
-
-AgentForge currently supports:
-
-- Skill-level HQS
-- Response-level HQS
-- System-level HQS
-
-Response HQS includes calibration, confidence, memory usefulness, and generic-output penalties. System HQS scores tool reliability, memory retrieval quality, Skill selection accuracy, trace completeness, recovery ability, and user experience.
-
-**Memory**
-
-Local three-layer memory:
-
-```text
-data/memory/
-  working_memory.json
-  episodes.jsonl
-  semantic_memory.json
-```
-
-`data/` is ignored by git.
-
-Retrieval returns ranked episodic and semantic memories with:
-
-- `_memory_rank`
-- `_memory_score`
-- `_memory_reasons`
-- `_memory_matched_tokens`
-
-`retrieve_context_for_task()` also returns a compact `retrieval` summary used by traces and the Web workbench.
-
-## Web Workbench
-
-The local Web workbench is served from the standard-library HTTP server and uses static HTML/CSS/JS.
-
-Main panels:
-
-- Chat
-- Generate Skill
-- Run Skill
-- Evolve Skill
-
-Inspection panels:
-
-- HQS score bars and dimensions
-- Run metadata
-- Warnings
-- Artifacts
-- Timeline
-- Drill-down tabs for Trace, HQS, Memory, and Skill Diff
-
-The Trace drill-down fetches the latest trace JSON and shows trace type, schema, execution state, trace steps, artifacts, and errors. The HQS drill-down shows response and system dimensions. The Memory drill-down shows retrieval scores, reasons, recent episodes, and semantic memory. The Skill Diff drill-down reads the current Skill version and displays `diff.patch` when present.
-
-## Skill Format
-
-Every valid Skill must contain:
-
-```md
-# <Skill Name>
-
-## Purpose
-
-## When to Use
-
-## Inputs
-
-## Outputs
-
-## Workflow
-
-## Constraints
-
-## Quality Criteria
-
-## Failure Modes
-
-## Examples
-
-## Version Notes
-```
-
-## Task Set Format
-
-JSON task sets use this shape:
-
-```json
-{
-  "name": "sample_ui_review_basic",
-  "description": "Sample UI review tasks.",
-  "tasks": [
-    {
-      "id": "dashboard_readability",
-      "input": "Review an admin dashboard with dense metrics.",
-      "expected_output": ["issues", "reasons", "recommendations"],
-      "criteria": ["structured report", "specific recommendations"]
-    }
-  ]
-}
-```
-
-YAML task sets are supported only when `PyYAML` is installed. JSON is the default MVP format.
-
-## Samples
-
-Committed samples:
-
-```text
-examples/skills/ui_review_skill/v1/SKILL.md
-tasksets/sample_ui_review_basic.json
-```
-
-The Skill selector scans both `skills/` and `examples/skills/`. Local Skills win over sample Skills when both match.
-
-## Runtime Artifacts
-
-AgentForge writes local artifacts to:
-
-```text
-skills/
-runs/
-traces/
-data/memory/
-```
-
-Git ignores generated runtime artifacts except committed placeholders and explicit samples.
-
-Do not commit:
-
-- `config/providers.json`
-- generated `skills/*`
-- generated `runs/*`
-- generated `traces/*`
-- `data/*`
-
-Artifact cleanup only targets old trace JSON files and run directories. It never deletes Skills, task sets, provider config, or memory.
-
-## JSON Validation
-
-JSON artifacts pass lightweight schema checks before writing. The validator checks required keys and JSON-safe values for:
-
-- traces
-- run results
-- task sets
-- HQS reports
-- rewrite metadata
-- candidate decisions
-- memory JSON
-
-This is intentionally small and dependency-free.
-
-Trace validation checks supported trace types, required top-level fields, step records, artifact records, and error records. Traces embed schema metadata so inspection tools and the Web workbench can display the schema version used at write time.
-
-## Project Layout
+## 项目结构
 
 ```text
 src/agentforge/
-  cli.py
-  common/
-    artifact_schema.py
-    artifacts.py
-    diagnostics.py
-    file_store.py
-    llm_client.py
-    trace.py
-    trace_inspector.py
-  skill_generator/
-    generator.py
-    prompts.py
-    requirement_parser.py
-    skill_schema.py
-    skill_writer.py
-  skill_evolver/
-    task_loader.py
-    skill_runner.py
-    hqs_evaluator.py
-    reflector.py
-    rewriter.py
-    version_manager.py
-    diff_writer.py
-    evolution_loop.py
-  agent/
-    harness.py
-    run.py
-    intent_parser.py
-    planner.py
-    executor.py
-    response_builder.py
-    skill_selector.py
-  memory/
-    memory_manager.py
-    stores.py
-  hqs/
-    response_evaluator.py
-    system_evaluator.py
-  web/
-    app.py
-    routes.py
-    static/
+  agent/                Harness、planner、executor、tools、tool-calling loop
+  common/               trace、diagnostics、cleanup、文件工具
+  hqs/                  response / system HQS evaluator
+  memory/               本地三层 memory
+  providers/            provider 配置和适配器
+  skill_generator/      需求解析和 Skill 生成
+  skill_evolver/        task set、runner、evaluator、rewriter、versioning
+  web/                  本地 HTTP server 和静态工作台
 
-examples/
-tasksets/
-runs/
-skills/
-traces/
-tests/
+docs/                   设计说明和运行模式文档
+examples/               示例 Skills
+tasksets/               任务集 JSON
+tests/                  单元测试和集成测试
 ```
 
-## Development Notes
+## 开发检查
 
-- Keep the system local-first.
-- Preserve existing Skill versions.
-- Keep generated artifacts readable.
-- Route model calls through provider config.
-- Prefer deterministic local behavior before opaque model behavior.
-- Record important steps in traces.
-- Keep Web/API, Skill generation, Skill evolution, memory, HQS, and Agent harness modular.
+交付前运行完整测试：
+
+```bash
+python -m unittest discover -s tests
+```
+
+真实 provider 测试默认跳过，需要显式开启：
+
+```bash
+set AGENTFORGE_RUN_REAL_PROVIDER_TESTS=1
+set AGENTFORGE_REAL_PROVIDERS=deepseek_v4_pro,dashscope
+python -m unittest tests.test_real_provider_tool_calling
+```
+
+`agentforge check-config --json` 会在 `config.real_provider_tests` 中显示真实 provider 测试当前是 `enabled` 还是 `skipped_by_default`，并列出请求的 provider 是否存在于本地配置中。
+
+常用文档：
+
+- [docs/agent_run_modes.md](docs/agent_run_modes.md)
+- [docs/tool_calling_agent_goal.md](docs/tool_calling_agent_goal.md)
+- [docs/autonomous_agent_platform_goal.md](docs/autonomous_agent_platform_goal.md)
+
+Windows PowerShell 处理中文文本、JSON 或 Markdown 时建议使用 UTF-8：
+
+```powershell
+chcp 65001
+$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+$env:PYTHONUTF8 = "1"
+```

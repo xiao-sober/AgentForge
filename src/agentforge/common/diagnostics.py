@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ def build_config_report(project_root: Path | str = ".", provider_config: Path | 
         "provider_example_exists": example_path.exists(),
         "default_provider": None,
         "providers": [],
+        "real_provider_tests": _real_provider_test_gate([]),
         "errors": [],
     }
 
@@ -60,6 +62,7 @@ def build_config_report(project_root: Path | str = ".", provider_config: Path | 
             report["providers"].append({"name": str(name), "valid": False, "error": "provider entry must be an object"})
             continue
         report["providers"].append(_redacted_provider_summary(str(name), provider))
+    report["real_provider_tests"] = _real_provider_test_gate([str(name) for name in providers.keys()])
 
     try:
         selected = load_provider_config(config_path)
@@ -113,6 +116,22 @@ def _redacted_provider_summary(name: str, provider: dict[str, Any]) -> dict[str,
         "api_key_env": provider.get("api_key_env"),
         "timeout_seconds": provider.get("timeout_seconds"),
         "thinking_mode": _redact(provider.get("thinking_mode")),
+    }
+
+
+def _real_provider_test_gate(configured_providers: list[str]) -> dict[str, Any]:
+    enabled = os.environ.get("AGENTFORGE_RUN_REAL_PROVIDER_TESTS") == "1"
+    raw_requested = os.environ.get("AGENTFORGE_REAL_PROVIDERS", "")
+    requested = [item.strip() for item in raw_requested.split(",") if item.strip()]
+    missing = [name for name in requested if name not in configured_providers]
+    return {
+        "enabled": enabled,
+        "enable_env": "AGENTFORGE_RUN_REAL_PROVIDER_TESTS=1",
+        "provider_filter_env": "AGENTFORGE_REAL_PROVIDERS",
+        "requested_providers": requested,
+        "configured_providers": configured_providers,
+        "missing_requested_providers": missing,
+        "status": "enabled" if enabled else "skipped_by_default",
     }
 
 

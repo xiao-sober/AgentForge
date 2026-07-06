@@ -1,4 +1,4 @@
-"""AgentForge Phase 3 agent harness."""
+"""AgentForge agent harness."""
 
 from agentforge.agent.harness import AgentChatResult, AgentHarness
 from agentforge.agent.run_loop import AgentRunLoop, AgentRunLoopState

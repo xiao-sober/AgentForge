@@ -362,6 +362,20 @@ class ToolCallingAgentTest(unittest.TestCase):
             )
             self.assertTrue(trace_summary["found"])
 
+    def test_default_scripted_planner_routes_trace_inspection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_trace(root, "20260703T000000Z_agent_chat.json")
+
+            result = AgentHarness(project_root=root).tool_chat("Inspect the latest trace.")
+
+            self.assertEqual(result.stop_reason, "final_answer")
+            self.assertEqual(result.planner_metadata["route"], "trace_inspection")
+            self.assertIn("Trace Inspection", result.response)
+            self.assertIn("20260703T000000Z_agent_chat.json", result.response)
+            tool_names = [item["tool_name"] for item in result.tool_calling.state.observations]
+            self.assertIn("inspect_latest_trace", tool_names)
+
     def test_harness_tool_chat_answers_memory_query_from_retrieval(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -395,6 +409,29 @@ class ToolCallingAgentTest(unittest.TestCase):
             memory_summary = result.tool_calling.state.observation_summaries[0]["output"]
             self.assertIn("memory_preview", memory_summary)
             self.assertTrue(memory_summary["memory_preview"]["episodes"])
+
+    def test_default_scripted_planner_routes_memory_query(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            harness = AgentHarness(project_root=root)
+            harness.memory.save_episode(
+                {
+                    "run_id": "run_provider_dry_run",
+                    "user_input": "provider dry run",
+                    "response": "DeepSeek and DashScope completed tool-calling dry runs.",
+                    "intent": {"intent_type": "agent_validation"},
+                }
+            )
+
+            result = harness.tool_chat("What memory do you have about provider dry run?")
+
+            self.assertEqual(result.stop_reason, "final_answer")
+            self.assertEqual(result.planner_metadata["route"], "memory_query")
+            self.assertIn("Memory Query", result.response)
+            self.assertIn("DeepSeek and DashScope", result.response)
+            tool_names = [item["tool_name"] for item in result.tool_calling.state.observations]
+            self.assertEqual(tool_names[0], "retrieve_memory_context")
+            self.assertNotIn("inspect_latest_trace", tool_names)
 
     def test_harness_tool_chat_trace_records_provider_repair_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:

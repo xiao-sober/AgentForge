@@ -18,6 +18,13 @@ class FailingProviderClient:
 
 
 class CliSmokeTest(unittest.TestCase):
+    def test_serve_help_uses_current_product_wording(self):
+        exit_code, stdout, stderr = _run_cli_capture(["serve", "--help"])
+
+        self.assertEqual(exit_code, 0, stderr)
+        self.assertIn("local AgentForge JSON API server and Web workbench", stdout)
+        self.assertNotIn("Phase 3", stdout)
+
     def test_local_cli_baseline_generate_run_evolve(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

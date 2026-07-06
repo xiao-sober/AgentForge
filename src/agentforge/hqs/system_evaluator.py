@@ -124,7 +124,7 @@ def _clamp(score: float) -> float:
 
 def _rationale(dimension: str, score: float) -> str:
     if score >= 4.0:
-        return f"{dimension} is healthy for the local MVP."
+        return f"{dimension} is healthy for the local AgentForge runtime."
     if score >= 3.0:
         return f"{dimension} is usable but should be watched."
     if score > 0:

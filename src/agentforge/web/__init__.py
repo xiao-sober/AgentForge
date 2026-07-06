@@ -1,4 +1,4 @@
-"""Standard-library JSON API for the AgentForge Phase 3 MVP."""
+"""Standard-library JSON API for AgentForge."""
 
 from agentforge.web.app import create_server, run_server
 from agentforge.web.routes import WebResponse, handle_request

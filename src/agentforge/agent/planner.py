@@ -207,7 +207,7 @@ def build_plan(intent: Intent, selected_skill: SkillCandidate | None) -> AgentPl
         steps=[
             _step(
                 "respond",
-                "return a local MVP Agent response",
+                "return a local AgentForge response",
                 "build_response",
                 tool_input={"message": intent.query},
                 expected_output="Readable Agent response.",
@@ -344,7 +344,7 @@ def _objective_for_intent(intent: Intent) -> str:
 def _default_stop_conditions(intent: Intent, complexity: str) -> list[StopCondition]:
     max_steps = 12 if complexity == "complex" else 8
     conditions = [
-        StopCondition("max_steps", max_steps, "Bound the local MVP plan."),
+        StopCondition("max_steps", max_steps, "Bound the local AgentForge plan."),
         StopCondition("blocking_error", True, "Stop when a non-recoverable tool or execution error occurs."),
         StopCondition("response_hqs_gate", "single_retry", "Rebuild the response once before reflection or reinforcement."),
     ]

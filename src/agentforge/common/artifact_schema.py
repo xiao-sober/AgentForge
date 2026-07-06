@@ -6,7 +6,7 @@ from typing import Any
 
 
 class ArtifactValidationError(ValueError):
-    """Raised when a JSON artifact does not match the local MVP schema."""
+    """Raised when a JSON artifact does not match the local AgentForge schema."""
 
 
 ALLOWED_TRACE_TYPES = {

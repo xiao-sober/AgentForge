@@ -65,7 +65,7 @@ def _load_payload(path: Path) -> Any:
         try:
             import yaml  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise ValueError("YAML task sets require PyYAML. Use JSON for the local MVP.") from exc
+            raise ValueError("YAML task sets require PyYAML. Use JSON for the local AgentForge runtime.") from exc
         return yaml.safe_load(path.read_text(encoding="utf-8-sig"))
 
     raise ValueError(f"Unsupported task set format '{path.suffix}'. Use .json, .yaml, or .yml.")
@@ -82,7 +82,7 @@ def _load_payload_from_text(text: str, source_path: str, file_format: str) -> An
         try:
             import yaml  # type: ignore[import-not-found]
         except ImportError as exc:
-            raise ValueError("YAML task sets require PyYAML. Use JSON for the local MVP.") from exc
+            raise ValueError("YAML task sets require PyYAML. Use JSON for the local AgentForge runtime.") from exc
         return yaml.safe_load(text.lstrip("\ufeff"))
     raise ValueError(f"Unsupported task set format '{file_format}'. Use json, yaml, or yml.")
 
