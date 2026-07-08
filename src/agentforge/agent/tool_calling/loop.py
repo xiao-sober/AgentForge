@@ -6,11 +6,12 @@ from typing import Any
 
 from agentforge.agent.run import AgentRun
 from agentforge.agent.run_loop import AgentRunLoop
-from agentforge.agent.tools import ToolCall, ToolRegistry
 from agentforge.agent.tool_calling.model_planner import ToolCallingPlanner
 from agentforge.agent.tool_calling.parser import DecisionParseError, ToolDecision, parse_model_decision
 from agentforge.agent.tool_calling.policy import ToolCallPolicy
 from agentforge.memory.memory_manager import MemoryManager
+from agentforge.runs.service import RunService
+from agentforge.tools import ToolCall, ToolRegistry
 
 
 @dataclass
@@ -86,6 +87,7 @@ class ToolCallingLoop:
         policy: ToolCallPolicy,
         runtime_state: dict[str, Any],
         available_tools: list[dict[str, Any]],
+        run_service: RunService | None = None,
     ) -> None:
         self.run = run
         self.registry = registry
@@ -100,7 +102,7 @@ class ToolCallingLoop:
             max_iterations=policy.max_iterations,
             available_tools=available_tools,
         )
-        self.agent_loop = AgentRunLoop(run, registry, memory, max_iterations=policy.max_iterations)
+        self.agent_loop = AgentRunLoop(run, registry, memory, max_iterations=policy.max_iterations, run_service=run_service)
         self.trace_steps: list[dict[str, Any]] = []
 
     def run_loop(self) -> ToolCallingLoopResult:

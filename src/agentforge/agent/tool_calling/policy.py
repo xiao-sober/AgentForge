@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentforge.agent.tools import ToolRegistry
 from agentforge.agent.tool_calling.parser import ToolDecision
+from agentforge.tools import ToolRegistry
 
 
 MODEL_CALLABLE_TOOL_NAMES = {

@@ -13,6 +13,7 @@ from agentforge.skill_evolver.rewriter import RewriteCandidate, RewrittenSkill, 
 from agentforge.skill_evolver.skill_runner import SkillRunResult, run_skill_markdown_on_taskset, run_skill_on_taskset
 from agentforge.skill_evolver.task_loader import TaskSet, load_taskset
 from agentforge.skill_evolver.version_manager import parse_skill_version_path
+from agentforge.workflows import WorkflowRunner
 
 
 _CRITICAL_HQS_DIMENSIONS = [
@@ -69,6 +70,7 @@ class EvolutionResult:
     final_skill_path: Path
     trace_path: Path
     stop_reason: str
+    run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,6 +79,7 @@ class EvolutionResult:
             "final_skill_path": str(self.final_skill_path),
             "trace_path": str(self.trace_path),
             "stop_reason": self.stop_reason,
+            "run_id": self.run_id,
         }
 
 
@@ -94,12 +97,35 @@ def evolve_skill(
     root = Path(project_root).resolve()
     taskset = taskset_path if isinstance(taskset_path, TaskSet) else load_taskset(taskset_path)
     taskset_source = taskset.source_path or "<memory>"
+    run_service = WorkflowRunner.for_task(
+        root,
+        workflow_id="skill_evolution_workflow",
+        task_type="skill_evolve",
+        steps=["load_taskset", "iteration_evaluate", "candidate_rejected", "accept_candidate"],
+        stop_conditions={
+            "max_iterations": max_iterations,
+            "target_hqs": target_hqs,
+            "min_improvement": min_improvement,
+        },
+    )
+    run_id = run_service.start_run(
+        task_type="skill_evolve",
+        title=f"Evolve Skill: {Path(skill_path).name}",
+        input_data={
+            "initial_skill_path": str(skill_path),
+            "taskset_path": taskset_source,
+            "max_iterations": max_iterations,
+            "target_hqs": target_hqs,
+            "min_improvement": min_improvement,
+        },
+    )
     current_skill_path = Path(skill_path).resolve()
     iterations: list[EvolutionIteration] = []
     artifacts: list[dict[str, str]] = []
     steps: list[dict[str, Any]] = [
         {"name": "load_taskset", "status": "completed", "path": taskset_source, "task_count": len(taskset.tasks)}
     ]
+    run_service.record_step(run_id, steps[-1], len(steps))
     stop_reason = "max_iterations"
 
     for iteration_number in range(1, max_iterations + 1):
@@ -129,6 +155,16 @@ def evolve_skill(
                 "run_dir": str(run_result.run_dir),
             }
         )
+        run_service.record_step(run_id, steps[-1], len(steps))
+        run_service.update_run(
+            run_id,
+            "running",
+            {
+                "iteration": iteration_number,
+                "average_hqs": hqs_report.average_score,
+                "run_dir": str(run_result.run_dir),
+            },
+        )
         artifacts.extend(
             [
                 {"type": "run_result", "path": _relative_or_absolute(run_result.result_path, root)},
@@ -150,6 +186,11 @@ def evolve_skill(
                     reflection_path,
                     decision="target_hqs_reached",
                 )
+            )
+            run_service.update_run(
+                run_id,
+                "running",
+                {"iteration": iteration_number, "stop_reason": stop_reason, "average_hqs": hqs_report.average_score},
             )
             break
 
@@ -213,6 +254,7 @@ def evolve_skill(
                     "reason": stop_reason,
                 }
             )
+            run_service.record_step(run_id, steps[-1], len(steps))
             iterations.append(
                 _iteration(
                     iteration_number,
@@ -261,6 +303,17 @@ def evolve_skill(
                 "quality_gate": quality_gate,
                 "new_skill_path": str(rewritten_skill.skill_path),
             }
+        )
+        run_service.record_step(run_id, steps[-1], len(steps))
+        run_service.update_run(
+            run_id,
+            "running",
+            {
+                "iteration": iteration_number,
+                "decision": "accepted",
+                "candidate_hqs": candidate_hqs_report.average_score,
+                "new_skill_path": str(rewritten_skill.skill_path),
+            },
         )
         artifacts.extend(
             [
@@ -321,6 +374,24 @@ def evolve_skill(
         artifacts=artifacts,
         errors=[],
     )
+    run_id = run_service.record_run(
+        task_type="skill_evolve",
+        title=f"Evolve Skill: {Path(skill_path).name}",
+        input_data={
+            "initial_skill_path": str(skill_path),
+            "taskset_path": taskset_source,
+            "max_iterations": max_iterations,
+            "target_hqs": target_hqs,
+            "min_improvement": min_improvement,
+        },
+        output_data=trace_output,
+        trace_path=trace_path,
+        status="completed",
+        run_id=run_id,
+        steps=steps,
+        artifacts=artifacts,
+        hqs_reports=_evolution_hqs_reports(iterations),
+    )
 
     return EvolutionResult(
         taskset=taskset,
@@ -328,6 +399,7 @@ def evolve_skill(
         final_skill_path=current_skill_path,
         trace_path=trace_path,
         stop_reason=stop_reason,
+        run_id=run_id,
     )
 
 
@@ -349,6 +421,15 @@ def _evaluate_candidate(
         project_root=project_root,
         llm_client=llm_client,
     )
+
+
+def _evolution_hqs_reports(iterations: list[EvolutionIteration]) -> dict[str, dict[str, Any]]:
+    reports: dict[str, dict[str, Any]] = {}
+    for iteration in iterations:
+        reports[f"iteration_{iteration.iteration}"] = iteration.hqs_report.to_dict()
+        if iteration.candidate_hqs_report is not None:
+            reports[f"iteration_{iteration.iteration}_candidate"] = iteration.candidate_hqs_report.to_dict()
+    return reports
 
 
 def _evaluate_candidate_quality_gate(

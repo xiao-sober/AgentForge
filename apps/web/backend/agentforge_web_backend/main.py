@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from agentforge.runs.service import RunService
 
 from .config import MAX_REQUEST_BODY_BYTES, default_frontend_dist
 from .legacy_bridge import dispatch_legacy_request, is_legacy_api_path
@@ -15,6 +16,7 @@ def create_app(project_root: Path | str = ".", frontend_dist: Path | str | None 
     app = FastAPI(title="AgentForge Web API", version="0.1.0")
     app.state.project_root = root
     app.state.frontend_dist = Path(frontend_dist).resolve() if frontend_dist is not None else default_frontend_dist(root)
+    RunService(root).ensure_initialized()
 
     @app.middleware("http")
     async def reject_oversized_body(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -25,6 +27,8 @@ def create_app(project_root: Path | str = ".", frontend_dist: Path | str | None 
             except ValueError:
                 return JSONResponse({"error": "Content-Length must be an integer."}, status_code=400)
             if byte_count > MAX_REQUEST_BODY_BYTES:
+                async for _ in request.stream():
+                    pass
                 return JSONResponse(
                     {"error": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes."},
                     status_code=413,

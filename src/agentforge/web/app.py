@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from agentforge.runs.service import RunService
 from agentforge.web.routes import WebResponse, handle_request
 
 MAX_REQUEST_BODY_BYTES = 1_000_000
@@ -11,6 +12,7 @@ MAX_REQUEST_BODY_BYTES = 1_000_000
 
 def create_server(project_root: Path | str = ".", host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     root = Path(project_root).resolve()
+    RunService(root).ensure_initialized()
 
     class AgentForgeHandler(BaseHTTPRequestHandler):
         server_version = "AgentForgeHTTP/0.1"

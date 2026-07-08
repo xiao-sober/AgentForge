@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiUrl, getJson, postJson } from "./api";
 import { Drilldown } from "./Drilldown";
+import { DashboardView } from "./features/dashboard/DashboardView";
+import { HqsView } from "./features/hqs/HqsView";
+import { MemoryView } from "./features/memory/MemoryView";
+import { RunsView } from "./features/runs/RunsView";
+import { SettingsView } from "./features/settings/SettingsView";
+import { SkillsView } from "./features/skills/SkillsView";
+import { TasksView } from "./features/tasks/TasksView";
+import { ToolsView } from "./features/tools/ToolsView";
+import { TraceViewer } from "./features/traces/TraceViewer";
 import { translate, type I18nKey } from "./i18n";
 import type {
   AgentMode,
@@ -45,7 +54,7 @@ export function App() {
   });
   const t = useCallback((key: I18nKey) => translate(lang, key), [lang]);
 
-  const [activeTab, setActiveTab] = useState<TabKey>("chat");
+  const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [activeDrilldown, setActiveDrilldown] = useState<DrilldownKey>("trace");
   const [drilldownStatus, setDrilldownStatus] = useState({ text: t("runIdle"), muted: true });
   const [statusText, setStatusText] = useState(t("statusLoading"));
@@ -73,6 +82,7 @@ export function App() {
   const [summary, setSummary] = useState<SummaryState>(defaultSummary);
   const [lastPayload, setLastPayload] = useState<WebPayload | null>(null);
   const [debugPayload, setDebugPayload] = useState<WebPayload | Record<string, never>>({});
+  const [runsRefreshKey, setRunsRefreshKey] = useState(0);
 
   const modeHint = useMemo(() => {
     const agentLabel = agentMode === "tool_calling" ? t("toolCallingAgent") : t("harnessWorkflow");
@@ -189,6 +199,7 @@ export function App() {
         ...providerPayload()
       });
       renderChatPayload(payload);
+      setRunsRefreshKey((value) => value + 1);
     });
   }
 
@@ -204,6 +215,7 @@ export function App() {
         ...providerPayload()
       });
       renderGeneratePayload(payload);
+      setRunsRefreshKey((value) => value + 1);
       const nextSkills = await loadSkills();
       const selected = selectSkillPath(nextSkills, payload.skill_path);
       if (selected) {
@@ -230,6 +242,7 @@ export function App() {
         ...providerPayload()
       });
       renderRunPayload(payload);
+      setRunsRefreshKey((value) => value + 1);
     });
   }
 
@@ -254,6 +267,7 @@ export function App() {
           ...providerPayload()
         });
         renderEvolvePayload(payload);
+        setRunsRefreshKey((value) => value + 1);
         await loadSkills();
       }
     );
@@ -444,51 +458,89 @@ export function App() {
           </section>
 
           <div className="tabs" role="tablist" aria-label={t("workflowTabs")}>
+            <TabButton active={activeTab === "dashboard"} label={t("tabDashboard")} onClick={() => setActiveTab("dashboard")} />
             <TabButton active={activeTab === "chat"} label={t("tabChat")} onClick={() => setActiveTab("chat")} />
             <TabButton active={activeTab === "generate"} label={t("tabGenerate")} onClick={() => setActiveTab("generate")} />
             <TabButton active={activeTab === "run"} label={t("tabRun")} onClick={() => setActiveTab("run")} />
             <TabButton active={activeTab === "evolve"} label={t("tabEvolve")} onClick={() => setActiveTab("evolve")} />
+            <TabButton active={activeTab === "runs"} label={t("tabRuns")} onClick={() => setActiveTab("runs")} />
+            <TabButton active={activeTab === "skills"} label={t("tabSkills")} onClick={() => setActiveTab("skills")} />
+            <TabButton active={activeTab === "tasks"} label={t("tabTasks")} onClick={() => setActiveTab("tasks")} />
+            <TabButton active={activeTab === "hqs"} label={t("tabHqs")} onClick={() => setActiveTab("hqs")} />
+            <TabButton active={activeTab === "traces"} label={t("tabTraceViewer")} onClick={() => setActiveTab("traces")} />
+            <TabButton active={activeTab === "tools"} label={t("tabTools")} onClick={() => setActiveTab("tools")} />
+            <TabButton active={activeTab === "memory"} label={t("tabMemory")} onClick={() => setActiveTab("memory")} />
+            <TabButton active={activeTab === "settings"} label={t("tabSettings")} onClick={() => setActiveTab("settings")} />
           </div>
 
-          <WorkflowPanels
-            activeTab={activeTab}
-            t={t}
-            skills={skills}
-            tasksets={tasksets}
-            runningAction={runningAction}
-            chatMessage={chatMessage}
-            chatDebug={chatDebug}
-            generateInput={generateInput}
-            runInput={runInput}
-            runSkillPath={runSkillPath}
-            evolveSkillPath={evolveSkillPath}
-            evolveTasksetPath={evolveTasksetPath}
-            maxIterations={maxIterations}
-            minImprovement={minImprovement}
-            onChatMessage={setChatMessage}
-            onChatDebug={setChatDebug}
-            onGenerateInput={setGenerateInput}
-            onRunInput={setRunInput}
-            onRunSkillPath={setRunSkillPath}
-            onEvolveSkillPath={setEvolveSkillPath}
-            onEvolveTasksetPath={setEvolveTasksetPath}
-            onMaxIterations={setMaxIterations}
-            onMinImprovement={setMinImprovement}
-            onChatKeyDown={handleChatKeyDown}
-            onRunChat={() => void runChat()}
-            onGenerateSkill={() => void generateSkill()}
-            onRunSkill={() => void runSkill()}
-            onEvolveSkill={() => void evolveSkill()}
-          />
+          {activeTab === "dashboard" ? (
+            <DashboardView active t={t} onNavigate={setActiveTab} />
+          ) : activeTab === "runs" ? (
+            <RunsView active refreshKey={runsRefreshKey} t={t} />
+          ) : activeTab === "skills" ? (
+            <SkillsView active t={t} />
+          ) : activeTab === "tasks" ? (
+            <TasksView active t={t} />
+          ) : activeTab === "hqs" ? (
+            <HqsView active t={t} />
+          ) : activeTab === "traces" ? (
+            <TraceViewer active t={t} />
+          ) : activeTab === "tools" ? (
+            <ToolsView active t={t} />
+          ) : activeTab === "memory" ? (
+            <MemoryView active t={t} />
+          ) : activeTab === "settings" ? (
+            <SettingsView
+              active
+              t={t}
+              useProvider={useProvider}
+              agentMode={agentMode}
+              onUseProvider={setUseProvider}
+              onAgentMode={setAgentMode}
+            />
+          ) : (
+            <>
+              <WorkflowPanels
+                activeTab={activeTab}
+                t={t}
+                skills={skills}
+                tasksets={tasksets}
+                runningAction={runningAction}
+                chatMessage={chatMessage}
+                chatDebug={chatDebug}
+                generateInput={generateInput}
+                runInput={runInput}
+                runSkillPath={runSkillPath}
+                evolveSkillPath={evolveSkillPath}
+                evolveTasksetPath={evolveTasksetPath}
+                maxIterations={maxIterations}
+                minImprovement={minImprovement}
+                onChatMessage={setChatMessage}
+                onChatDebug={setChatDebug}
+                onGenerateInput={setGenerateInput}
+                onRunInput={setRunInput}
+                onRunSkillPath={setRunSkillPath}
+                onEvolveSkillPath={setEvolveSkillPath}
+                onEvolveTasksetPath={setEvolveTasksetPath}
+                onMaxIterations={setMaxIterations}
+                onMinImprovement={setMinImprovement}
+                onChatKeyDown={handleChatKeyDown}
+                onRunChat={() => void runChat()}
+                onGenerateSkill={() => void generateSkill()}
+                onRunSkill={() => void runSkill()}
+                onEvolveSkill={() => void evolveSkill()}
+              />
 
-          <ResultPanel
-            empty={resultEmpty}
-            progress={progress}
-            elapsedSeconds={elapsedSeconds}
-            resultHtml={resultHtml}
-            ribbonPayload={ribbonPayload}
-            t={t}
-          />
+              <ResultPanel
+                empty={resultEmpty}
+                progress={progress}
+                elapsedSeconds={elapsedSeconds}
+                resultHtml={resultHtml}
+                ribbonPayload={ribbonPayload}
+                t={t}
+              />
+            </>
+          )}
         </section>
 
         <aside className="sidepanel">

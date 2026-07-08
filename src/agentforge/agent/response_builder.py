@@ -23,6 +23,26 @@ def build_response(
     if blocking_errors and not execution.run_result and not execution.generated_skill:
         return _error_response(intent, plan, execution)
 
+    if plan.action == "reserved_task" and intent.task_type:
+        return "\n".join(
+            [
+                "# AgentForge Response",
+                "",
+                "## Task Router",
+                "",
+                f"- Selected task type: {intent.task_type}",
+                "- Status: reserved",
+                "- This task family is recognized by chat intent routing but does not have an executable handler yet.",
+                "",
+                "## Next Step",
+                "",
+                "- Add a Task Router handler before using this task type for execution.",
+            ]
+        ).rstrip() + "\n"
+
+    if plan.action == "route_task" and execution.task_result:
+        return _task_result_response(intent, plan, execution, root)
+
     if plan.action == "generate_skill" and execution.generated_skill:
         skill_path = _relative_or_absolute(execution.generated_skill.skill_path, root)
         trace_path = _relative_or_absolute(execution.generated_skill.trace_path, root)
@@ -151,6 +171,34 @@ def _error_response(intent: Intent, plan: AgentPlan, execution: ExecutionResult)
             "- Details were written to the agent_chat trace.",
         ]
     ).rstrip() + "\n"
+
+
+def _task_result_response(intent: Intent, plan: AgentPlan, execution: ExecutionResult, root: Path) -> str:
+    task_result = execution.task_result
+    if task_result is None:
+        return _error_response(intent, plan, execution)
+    trace_line = None
+    if task_result.trace_path:
+        trace_line = f"- Task trace: {_relative_or_absolute(task_result.trace_path, root)}"
+    lines = [
+        "# AgentForge Response",
+        "",
+        "## Task Router",
+        "",
+        f"- Selected task type: {task_result.task_type}",
+        f"- Status: {task_result.status}",
+        f"- Task run: {task_result.run_id}",
+    ]
+    if trace_line:
+        lines.append(trace_line)
+    if task_result.output:
+        lines.extend(["", "## Result", "", execution.output_text.strip() or f"Task Router completed {task_result.task_type}."])
+    if task_result.artifacts:
+        lines.extend(["", "## Artifacts", ""])
+        for artifact in task_result.artifacts[:5]:
+            if isinstance(artifact, dict):
+                lines.append(f"- {artifact.get('type')}: {artifact.get('path')}")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _warning_lines(execution: ExecutionResult) -> list[str]:

@@ -1,5 +1,6 @@
 import json
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -9,6 +10,8 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import uvicorn
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "web" / "backend"))
 
 from agentforge_web_backend.main import MAX_REQUEST_BODY_BYTES, create_app
 
@@ -47,6 +50,30 @@ class WebFastApiTest(unittest.TestCase):
                 self.assertIn("response", chat)
                 self.assertTrue(chat["trace_url"].startswith("/api/traces/"))
                 self.assertTrue(Path(chat["trace_path"]).exists())
+
+                runs = _get_json(f"http://{host}:{port}/api/runs")
+                self.assertTrue(any(run["run_id"] == chat["run_id"] for run in runs["runs"]))
+                run_detail = _get_json(f"http://{host}:{port}/api/runs/{chat['run_id']}")
+                self.assertEqual(run_detail["run_id"], chat["run_id"])
+                self.assertTrue(run_detail["steps"])
+
+                task_types = _get_json(f"http://{host}:{port}/api/tasks/types")
+                self.assertTrue(any(item["task_type"] == "trace_diagnosis" for item in task_types["task_types"]))
+                task = _post_json(
+                    f"http://{host}:{port}/api/tasks",
+                    {"task_type": "trace_diagnosis", "input": {"run_id": chat["run_id"]}},
+                )
+                self.assertEqual(task["task_type"], "trace_diagnosis")
+                self.assertEqual(task["status"], "completed")
+                self.assertTrue(task["trace_url"].startswith("/api/traces/"))
+
+                tools = _get_json(f"http://{host}:{port}/api/tools")
+                self.assertTrue(any(item["name"] == "execute_plan" for item in tools["tools"]))
+                tool_detail = _get_json(f"http://{host}:{port}/api/tools/execute_plan")
+                self.assertEqual(tool_detail["name"], "execute_plan")
+
+                episodes = _get_json(f"http://{host}:{port}/api/memory/episodes")
+                self.assertGreaterEqual(episodes["total_count"], 1)
 
                 legacy_health = _get_json(f"http://{host}:{port}/health")
                 self.assertEqual(legacy_health["status"], "ok")

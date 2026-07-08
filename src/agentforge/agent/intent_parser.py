@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -14,6 +14,9 @@ class Intent:
     skill_hint: str | None
     confidence: float
     reasons: list[str]
+    task_type: str | None = None
+    task_input: dict[str, Any] = field(default_factory=dict)
+    task_options: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -24,11 +27,15 @@ class Intent:
             "skill_hint": self.skill_hint,
             "confidence": self.confidence,
             "reasons": self.reasons,
+            "task_type": self.task_type,
+            "task_input": self.task_input,
+            "task_options": self.task_options,
         }
 
 
 def parse_intent(user_input: str) -> Intent:
-    query = " ".join(user_input.strip().split())
+    raw_query = user_input.strip()
+    query = " ".join(raw_query.split())
     if not query:
         return Intent(
             intent_type="empty",
@@ -69,6 +76,23 @@ def parse_intent(user_input: str) -> Intent:
             skill_hint=skill_hint,
             confidence=0.95,
             reasons=reasons,
+            task_type="skill_generate",
+            task_input={"input": query},
+        )
+
+    if _is_skill_evolution_request(lowered, query):
+        task_options = _skill_evolution_options(query)
+        return Intent(
+            intent_type="evolve_skill",
+            query=query,
+            requires_skill=True,
+            needs_skill_generation=False,
+            skill_hint=skill_hint,
+            confidence=0.85,
+            reasons=["explicit_skill_evolution"],
+            task_type="skill_evolve",
+            task_input={},
+            task_options=task_options,
         )
 
     if _contains_any(lowered, ["list skills", "show skills"]) or _contains_any(query, ["列出 Skill", "查看 Skill"]):
@@ -91,6 +115,8 @@ def parse_intent(user_input: str) -> Intent:
             skill_hint=skill_hint,
             confidence=0.8,
             reasons=["inspect_traces"],
+            task_type="trace_diagnosis",
+            task_input=_trace_diagnosis_input(query),
         )
 
     if _is_memory_query_request(lowered):
@@ -102,6 +128,20 @@ def parse_intent(user_input: str) -> Intent:
             skill_hint=skill_hint,
             confidence=0.85,
             reasons=["query_memory"],
+        )
+
+    reserved_task_type = _reserved_task_type(lowered)
+    if reserved_task_type:
+        return Intent(
+            intent_type="reserved_task",
+            query=query,
+            requires_skill=False,
+            needs_skill_generation=False,
+            skill_hint=skill_hint,
+            confidence=0.7,
+            reasons=[f"reserved_{reserved_task_type}"],
+            task_type=reserved_task_type,
+            task_input={"input": raw_query if reserved_task_type == "code_analysis" else query},
         )
 
     skill_action = _contains_any(
@@ -128,6 +168,9 @@ def parse_intent(user_input: str) -> Intent:
             skill_hint=skill_hint,
             confidence=0.75,
             reasons=reasons,
+            task_type="skill_run",
+            task_input={"input": query},
+            task_options={"skill_slug": skill_hint} if skill_hint else {},
         )
 
     return Intent(
@@ -156,7 +199,7 @@ def _detect_skill_hint(lowered: str) -> str | None:
 
 def _is_trace_inspection_request(lowered: str, original: str) -> bool:
     normalized = lowered.replace("_", " ")
-    if re.search(r"\b(list|show|inspect|view|open|read|find)\s+(the\s+)?(latest\s+)?traces?\b", normalized):
+    if re.search(r"\b(list|show|inspect|view|open|read|find|diagnose)\s+(the\s+)?(latest\s+)?traces?\b", normalized):
         return True
     if re.search(r"\btraces?\s+(list|viewer|detail|details|inspection|summary)\b", normalized):
         return True
@@ -165,6 +208,59 @@ def _is_trace_inspection_request(lowered: str, original: str) -> bool:
     if re.search(r"\btrace\s+[A-Za-z0-9_.-]+\.json\b", normalized):
         return True
     return _contains_any(original, ["查看 trace", "打开 trace", "查看日志", "查看轨迹"])
+
+
+def _trace_diagnosis_input(query: str) -> dict[str, Any]:
+    run_id_match = re.search(r"\brun_[A-Za-z0-9_:-]+\b", query)
+    if run_id_match:
+        return {"run_id": run_id_match.group(0)}
+    trace_match = re.search(r"\b([A-Za-z0-9_.-]+\.json)\b", query)
+    if trace_match:
+        return {"trace_file": trace_match.group(1)}
+    return {"latest": True}
+
+
+def _is_skill_evolution_request(lowered: str, original: str) -> bool:
+    normalized = lowered.replace("_", " ")
+    if re.search(r"\b(evolve|improve|rewrite|reinforce|optimi[sz]e)\s+(a\s+)?skills?\b", normalized):
+        return True
+    if re.search(r"\bskills?\s+(evolution|rewrite|reinforcement|improvement)\b", normalized):
+        return True
+    return _contains_any(original, ["演进 Skill", "改进 Skill", "优化 Skill", "重写 Skill", "强化 Skill"])
+
+
+def _skill_evolution_options(query: str) -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    skill_match = re.search(r"\b(skills[/\\][^\s\"']*SKILL\.md)\b", query)
+    if skill_match:
+        options["skill_path"] = skill_match.group(1)
+    taskset_match = re.search(r"\b(tasksets[/\\][^\s\"']*\.(?:json|ya?ml))\b", query)
+    if taskset_match:
+        options["taskset_path"] = taskset_match.group(1)
+    max_iterations_match = re.search(r"\bmax[_ -]?iterations\s*[:=]\s*(\d+)\b", query, flags=re.IGNORECASE)
+    if max_iterations_match:
+        options["max_iterations"] = int(max_iterations_match.group(1))
+    return options
+
+
+def _reserved_task_type(lowered: str) -> str | None:
+    normalized = lowered.replace("_", " ")
+    if re.search(r"\b(code|source|repository|repo|python|typescript|javascript|module|function)\b", normalized) and re.search(
+        r"\b(analyze|analyse|review|inspect|debug|diagnose)\b",
+        normalized,
+    ):
+        return "code_analysis"
+    if re.search(r"\b(document|pdf|docx|markdown|report|article|paper)\b", normalized) and re.search(
+        r"\b(analyze|analyse|review|summarize|extract|inspect)\b",
+        normalized,
+    ):
+        return "document_analysis"
+    if re.search(r"\b(data|dataset|csv|excel|spreadsheet|jsonl|table)\b", normalized) and re.search(
+        r"\b(analyze|analyse|summarize|inspect|profile|clean)\b",
+        normalized,
+    ):
+        return "data_analysis"
+    return None
 
 
 def _is_memory_query_request(lowered: str) -> bool:

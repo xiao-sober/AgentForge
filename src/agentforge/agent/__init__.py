@@ -2,7 +2,7 @@
 
 from agentforge.agent.harness import AgentChatResult, AgentHarness
 from agentforge.agent.run_loop import AgentRunLoop, AgentRunLoopState
-from agentforge.agent.tools import AgentTool, ToolCall, ToolErrorSpec, ToolFieldSpec, ToolRegistry, ToolResult, ToolSchema
+from agentforge.tools import AgentTool, ToolCall, ToolErrorSpec, ToolFieldSpec, ToolRegistry, ToolResult, ToolSchema
 
 __all__ = [
     "AgentChatResult",

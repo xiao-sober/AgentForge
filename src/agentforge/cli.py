@@ -209,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
             "skill_slug": result.requirement.skill_slug,
             "version": result.version,
             "generation_mode": result.generation_mode,
+            "run_id": result.run_id,
         }
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -253,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
             "trace_path": str(result.trace_path),
             "mode": result.mode,
             "outputs": [output.to_dict() for output in result.outputs],
+            "run_id": result.run_id,
         }
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -458,6 +460,7 @@ def _compact_agent_chat_payload(result) -> dict[str, object]:
             {
                 "intent": result.intent.to_dict(),
                 "selected_skill": result.selected_skill.to_dict() if result.selected_skill else None,
+                "task_result": result.execution.task_result.to_dict() if result.execution.task_result else None,
                 "reflection": result.reflection,
                 "reinforcement": result.reinforcement,
             }

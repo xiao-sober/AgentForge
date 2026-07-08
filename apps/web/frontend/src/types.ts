@@ -1,6 +1,19 @@
 export type Lang = "zh" | "en";
 export type AgentMode = "harness_workflow" | "tool_calling";
-export type TabKey = "chat" | "generate" | "run" | "evolve";
+export type TabKey =
+  | "dashboard"
+  | "chat"
+  | "generate"
+  | "run"
+  | "evolve"
+  | "runs"
+  | "skills"
+  | "tasks"
+  | "hqs"
+  | "traces"
+  | "tools"
+  | "memory"
+  | "settings";
 export type DrilldownKey = "trace" | "hqs" | "memory" | "diff";
 
 export type JsonRecord = Record<string, unknown>;
@@ -27,9 +40,12 @@ export interface SkillSummary {
   title?: string;
   latest_version?: string;
   latest_skill_path?: string;
+  versions?: string[];
   version?: string;
   source?: string;
   skill_path?: string;
+  relative_path?: string;
+  metadata?: JsonRecord;
   match_score?: number;
   reasons?: string[];
 }
@@ -114,6 +130,188 @@ export interface WebPayload extends JsonRecord {
     candidate_average_hqs?: number | null;
     decision?: string;
   }>;
+}
+
+export interface RunRecord extends JsonRecord {
+  run_id: string;
+  task_type: string;
+  title: string;
+  status: string;
+  input?: JsonRecord;
+  output?: JsonRecord | null;
+  trace_path?: string | null;
+  created_at: string;
+  updated_at?: string;
+  completed_at?: string | null;
+}
+
+export interface RunStepRecord extends JsonRecord {
+  step_id: string;
+  run_id: string;
+  name: string;
+  kind: string;
+  status: string;
+  input?: unknown;
+  output?: unknown;
+  error?: unknown;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface RunArtifactRecord extends JsonRecord {
+  artifact_id: string;
+  run_id: string;
+  type: string;
+  path?: string | null;
+  content_type?: string | null;
+  metadata?: JsonRecord | null;
+  created_at: string;
+}
+
+export interface RunToolCallRecord extends JsonRecord {
+  tool_call_id: string;
+  run_id: string;
+  step_id?: string | null;
+  tool_name: string;
+  status: string;
+  arguments?: JsonRecord;
+  result?: JsonRecord | null;
+  error?: unknown;
+  started_at: string;
+  completed_at?: string | null;
+}
+
+export interface RunHqsRecord extends JsonRecord {
+  hqs_id: string;
+  run_id: string;
+  scope: string;
+  average_score: number;
+  report: ScoreReport;
+  created_at: string;
+}
+
+export interface RunWorkflowCheckpointRecord extends JsonRecord {
+  checkpoint_id: string;
+  run_id: string;
+  workflow_id: string;
+  step_name?: string | null;
+  state?: JsonRecord;
+  created_at: string;
+}
+
+export interface RunDetailRecord extends RunRecord {
+  steps?: RunStepRecord[];
+  artifacts?: RunArtifactRecord[];
+  tool_calls?: RunToolCallRecord[];
+  hqs_reports?: RunHqsRecord[];
+  workflow_checkpoints?: RunWorkflowCheckpointRecord[];
+}
+
+export interface ToolRecord extends JsonRecord {
+  name: string;
+  kind: string;
+  description?: string;
+  input_schema?: JsonRecord;
+  output_schema?: JsonRecord;
+  error_specs?: unknown[];
+  permission_level?: string;
+  idempotent?: boolean;
+  side_effects?: boolean;
+  timeout_seconds?: number | null;
+}
+
+export interface MemoryEpisodeRecord extends JsonRecord {
+  episode_id?: string;
+  created_at?: string;
+  user_input?: string;
+  response?: string;
+}
+
+export interface SemanticMemoryRecord extends JsonRecord {
+  key?: string;
+  updated_at?: string;
+  summary?: string;
+  tags?: unknown[];
+}
+
+export interface TaskTypeRecord extends JsonRecord {
+  task_type: string;
+  title: string;
+  description: string;
+  input_schema?: JsonRecord;
+  options_schema?: JsonRecord;
+  stable?: boolean;
+}
+
+export interface TraceSummaryRecord extends JsonRecord {
+  filename: string;
+  path?: string;
+  type?: string;
+  created_at?: string;
+  trace_id?: string;
+  error?: string;
+}
+
+export interface TraceDetailRecord extends JsonRecord {
+  trace_id?: string;
+  type?: string;
+  created_at?: string;
+  input?: unknown;
+  steps?: unknown[];
+  output?: unknown;
+  artifacts?: unknown[];
+  errors?: unknown[];
+}
+
+export interface HqsStatusRecord extends JsonRecord {
+  last_response_hqs?: ScoreReport;
+  last_system_hqs?: ScoreReport;
+  current_system_hqs?: ScoreReport;
+}
+
+export interface HealthDirectoryRecord extends JsonRecord {
+  path: string;
+  exists?: boolean;
+  is_dir?: boolean;
+  writable?: boolean;
+}
+
+export interface HealthStatusRecord extends JsonRecord {
+  status?: string;
+  version?: JsonRecord;
+  directories?: HealthDirectoryRecord[];
+  config?: JsonRecord;
+}
+
+export interface ProviderSummaryRecord extends JsonRecord {
+  name?: string;
+  type?: string;
+  base_url?: string;
+  model?: string;
+  has_api_key?: boolean;
+  api_key_env?: string | null;
+  timeout_seconds?: number;
+}
+
+export interface ConfigStatusRecord extends JsonRecord {
+  project_root?: string;
+  provider_config_path?: string;
+  provider_config_exists?: boolean;
+  provider_example_exists?: boolean;
+  default_provider?: string;
+  providers?: ProviderSummaryRecord[];
+  selected_provider?: JsonRecord;
+  errors?: unknown[];
+}
+
+export interface SkillVersionRecord extends JsonRecord {
+  skill_slug: string;
+  version: string;
+  skill_path?: string;
+  source?: string;
+  markdown?: string;
+  metadata?: JsonRecord | null;
+  diff?: string | null;
 }
 
 export interface SummaryState {

@@ -10,6 +10,7 @@ from agentforge.common.trace import trace_timestamp, write_trace
 from agentforge.skill_evolver.task_loader import Task, TaskSet
 from agentforge.skill_evolver.version_manager import parse_skill_version_path
 from agentforge.skill_generator.skill_schema import validate_skill
+from agentforge.workflows import WorkflowRunner
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class SkillRunResult:
     result_path: Path
     trace_path: Path
     mode: str
+    run_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,6 +51,7 @@ class SkillRunResult:
             "result_path": str(self.result_path),
             "trace_path": str(self.trace_path),
             "mode": self.mode,
+            "run_id": self.run_id,
         }
 
 
@@ -118,6 +121,17 @@ def run_skill_markdown_on_taskset(
     if not validation.valid:
         raise ValueError(f"Skill failed schema validation: {validation.to_dict()}")
 
+    run_service = WorkflowRunner.for_task(
+        root,
+        workflow_id="skill_run_workflow",
+        task_type="skill_run",
+        steps=["load_skill", "load_taskset", "run_task", "write_result"],
+    )
+    run_id = run_service.start_run(
+        task_type="skill_run",
+        title=f"Run Skill: {skill_slug} {version}",
+        input_data={"skill_path": str(resolved_skill_path), "taskset": taskset.to_dict()},
+    )
     run_dir = root / "runs" / skill_slug / version / trace_timestamp()
     output_dir = run_dir / "outputs"
     write_json(run_dir / "taskset.json", taskset.to_dict())
@@ -132,6 +146,8 @@ def run_skill_markdown_on_taskset(
         },
         {"name": "load_taskset", "status": "completed", "task_count": len(taskset.tasks)},
     ]
+    run_service.record_step(run_id, steps[0], 1)
+    run_service.record_step(run_id, steps[1], 2)
     errors: list[dict[str, Any]] = []
     outputs: list[TaskOutput] = []
     mode = "model" if llm_client else "local"
@@ -157,7 +173,13 @@ def run_skill_markdown_on_taskset(
                         "output_contract": None,
                     }
                 )
-                write_trace(
+                run_service.record_step(run_id, steps[-1], len(steps))
+                run_service.fail_run(
+                    run_id,
+                    {"error_type": exc.__class__.__name__, "message": str(exc), "task_id": task.task_id},
+                    output_data={"run_dir": _relative_or_absolute(run_dir, root), "mode": mode, "errors": errors},
+                )
+                failure_trace_path = write_trace(
                     project_root=root,
                     trace_type="skill_execution",
                     input_data={"skill_path": str(resolved_skill_path), "taskset": taskset.to_dict()},
@@ -165,6 +187,22 @@ def run_skill_markdown_on_taskset(
                     steps=steps,
                     artifacts=[{"type": "run_directory", "path": _relative_or_absolute(run_dir, root)}],
                     errors=errors,
+                )
+                run_service.record_run(
+                    task_type="skill_run",
+                    title=f"Run Skill: {skill_slug} {version}",
+                    input_data={"skill_path": str(resolved_skill_path), "taskset": taskset.to_dict()},
+                    output_data={
+                        "run_dir": _relative_or_absolute(run_dir, root),
+                        "result_path": None,
+                        "mode": mode,
+                        "errors": errors,
+                    },
+                    trace_path=failure_trace_path,
+                    status="failed",
+                    run_id=run_id,
+                    steps=steps,
+                    artifacts=[{"type": "run_directory", "path": _relative_or_absolute(run_dir, root)}],
                 )
                 raise LLMProviderError(
                     f"Provider Skill execution failed for task '{task.task_id}': {exc}"
@@ -192,6 +230,17 @@ def run_skill_markdown_on_taskset(
                 "output_contract": output_contract,
             }
         )
+        run_service.record_step(run_id, steps[-1], len(steps))
+        run_service.update_run(
+            run_id,
+            "running",
+            {
+                "run_dir": _relative_or_absolute(run_dir, root),
+                "mode": mode,
+                "completed_tasks": len(outputs),
+                "total_tasks": len(taskset.tasks),
+            },
+        )
 
     result_payload = {
         "skill": {
@@ -217,6 +266,26 @@ def run_skill_markdown_on_taskset(
         ],
         errors=errors,
     )
+    run_id = run_service.record_run(
+        task_type="skill_run",
+        title=f"Run Skill: {skill_slug} {version}",
+        input_data={"skill_path": str(resolved_skill_path), "taskset": taskset.to_dict()},
+        output_data={
+            "run_dir": _relative_or_absolute(run_dir, root),
+            "result_path": _relative_or_absolute(result_path, root),
+            "mode": mode,
+            "output_count": len(outputs),
+            "errors": errors,
+        },
+        trace_path=trace_path,
+        status="failed" if errors else "completed",
+        run_id=run_id,
+        steps=steps,
+        artifacts=[
+            {"type": "run_result", "path": _relative_or_absolute(result_path, root)},
+            {"type": "run_directory", "path": _relative_or_absolute(run_dir, root)},
+        ],
+    )
 
     return SkillRunResult(
         skill_path=resolved_skill_path,
@@ -225,6 +294,7 @@ def run_skill_markdown_on_taskset(
         result_path=result_path,
         trace_path=trace_path,
         mode=mode,
+        run_id=run_id,
     )
 
 

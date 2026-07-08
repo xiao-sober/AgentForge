@@ -10,6 +10,8 @@ class IntentParserTest(unittest.TestCase):
         self.assertEqual(intent.intent_type, "generate_skill")
         self.assertTrue(intent.needs_skill_generation)
         self.assertEqual(intent.skill_hint, "ui_review_skill")
+        self.assertEqual(intent.task_type, "skill_generate")
+        self.assertEqual(intent.task_input["input"], intent.query)
 
     def test_detects_english_skill_generation_with_article(self):
         intent = parse_intent("Generate a Skill for API response contract review.")
@@ -32,6 +34,8 @@ class IntentParserTest(unittest.TestCase):
         self.assertEqual(intent.intent_type, "run_skill")
         self.assertTrue(intent.requires_skill)
         self.assertEqual(intent.skill_hint, "ui_review_skill")
+        self.assertEqual(intent.task_type, "skill_run")
+        self.assertEqual(intent.task_options["skill_slug"], "ui_review_skill")
 
     def test_trace_url_field_does_not_force_trace_inspection(self):
         intent = parse_intent("Analyze API JSON output with trace_url, hqs, and warnings.")
@@ -44,6 +48,22 @@ class IntentParserTest(unittest.TestCase):
         intent = parse_intent("Inspect the latest trace.")
 
         self.assertEqual(intent.intent_type, "inspect_traces")
+        self.assertFalse(intent.requires_skill)
+        self.assertEqual(intent.task_type, "trace_diagnosis")
+        self.assertEqual(intent.task_input, {"latest": True})
+
+    def test_trace_inspection_extracts_run_id(self):
+        intent = parse_intent("Diagnose trace for run_abcd1234.")
+
+        self.assertEqual(intent.intent_type, "inspect_traces")
+        self.assertEqual(intent.task_type, "trace_diagnosis")
+        self.assertEqual(intent.task_input["run_id"], "run_abcd1234")
+
+    def test_detects_reserved_code_analysis_task(self):
+        intent = parse_intent("Analyze this Python function for edge cases.")
+
+        self.assertEqual(intent.intent_type, "reserved_task")
+        self.assertEqual(intent.task_type, "code_analysis")
         self.assertFalse(intent.requires_skill)
 
     def test_detects_memory_query(self):

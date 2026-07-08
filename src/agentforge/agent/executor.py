@@ -9,8 +9,8 @@ from agentforge.agent.planner import AgentPlan, PlanStep
 from agentforge.agent.skill_selector import SkillCandidate
 from agentforge.common.llm_client import LLMClient
 from agentforge.common.trace import utc_now_iso
-from agentforge.skill_evolver.skill_runner import SkillRunResult, run_skill
-from agentforge.skill_generator.generator import GeneratedSkill, generate_skill_from_input
+from agentforge.skill_evolver.skill_runner import SkillRunResult
+from agentforge.skill_generator.generator import GeneratedSkill
 
 
 COMPLETED_STEP_STATUSES = {"completed", "completed_with_warnings"}
@@ -111,11 +111,13 @@ class ExecutionResult:
     generated_skill: GeneratedSkill | None
     selected_skill: SkillCandidate | None
     run_result: SkillRunResult | None
+    task_result: Any | None
     output_text: str
     artifacts: list[dict[str, str]]
     errors: list[dict[str, Any]]
     plan_step_results: list[dict[str, Any]] = field(default_factory=list)
     run_results: list[SkillRunResult] = field(default_factory=list)
+    task_results: list[Any] = field(default_factory=list)
     execution_state: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -124,7 +126,9 @@ class ExecutionResult:
             "generated_skill_path": str(self.generated_skill.skill_path) if self.generated_skill else None,
             "selected_skill": self.selected_skill.to_dict() if self.selected_skill else None,
             "run_result": self.run_result.to_dict() if self.run_result else None,
+            "task_result": self.task_result.to_dict() if self.task_result else None,
             "run_results": [run_result.to_dict() for run_result in self.run_results],
+            "task_results": [task_result.to_dict() for task_result in self.task_results],
             "output_text": self.output_text,
             "artifacts": self.artifacts,
             "errors": self.errors,
@@ -152,6 +156,7 @@ class PlanExecutor:
         self.errors: list[dict[str, Any]] = []
         self.plan_step_results: list[dict[str, Any]] = []
         self.run_results: list[SkillRunResult] = []
+        self.task_results: list[Any] = []
         self.state = PlanExecutionState.from_plan(plan)
 
     def execute(self) -> ExecutionResult:
@@ -190,19 +195,32 @@ class PlanExecutor:
         if step.name.startswith("run_skill"):
             self._execute_run_skill_step(step)
             return
+        if step.name.startswith("route_"):
+            self._execute_route_task_step(step)
+            return
         self._record_step_result(step, "skipped", error=f"Unsupported execute_plan step: {step.name}")
         self.state.transition(step, "skipped", "unsupported_execute_plan_step")
 
     def _execute_generate_skill(self, step: PlanStep) -> None:
         try:
-            generated = generate_skill_from_input(self.intent.query, project_root=self.root, llm_client=self.llm_client)
+            task_result = _route_task(
+                task_type="skill_generate",
+                task_input={"input": self.intent.query},
+                task_options={},
+                project_root=self.root,
+                llm_client=self.llm_client,
+            )
+            self._record_task_result(task_result)
+            generated = task_result.raw_result
+            if not isinstance(generated, GeneratedSkill):
+                raise TypeError("Task Router skill_generate did not return a GeneratedSkill result.")
             self._record_generated_skill(generated, score=5.0, reasons=["generated_for_request"])
             self._record_step_result(
                 step,
-                "completed",
+                task_result.status,
                 artifact_path=_relative_or_absolute(generated.skill_path, self.root),
             )
-            self.state.transition(step, "completed", "skill_generated", {"version": generated.version})
+            self.state.transition(step, task_result.status, "skill_generated", {"version": generated.version})
             return
         except Exception as exc:
             self.errors.append(
@@ -229,12 +247,17 @@ class PlanExecutor:
             or self.intent.query
         ).strip()
         try:
-            run_result = run_skill(
-                self.skill_to_run.skill_path,
-                input_text,
+            task_result = _route_task(
+                task_type="skill_run",
+                task_input={"input": input_text},
+                task_options={"skill_path": str(self.skill_to_run.skill_path)},
                 project_root=self.root,
                 llm_client=self.llm_client,
             )
+            self._record_task_result(task_result)
+            run_result = task_result.raw_result
+            if not isinstance(run_result, SkillRunResult):
+                raise TypeError("Task Router skill_run did not return a SkillRunResult result.")
             step_status = self._record_run_result(step, run_result)
             self.state.transition(
                 step,
@@ -256,6 +279,54 @@ class PlanExecutor:
             self._record_step_result(step, "failed", task_id=_step_task_id(step), error=str(exc))
             self.state.transition(step, "failed", "skill_step_failed", {"error": str(exc)})
 
+    def _execute_route_task_step(self, step: PlanStep) -> None:
+        payload = step.tool_input if isinstance(step.tool_input, dict) else {}
+        task_type = str(payload.get("task_type") or self.intent.task_type or "").strip()
+        if not task_type:
+            error = "No Task Router task_type was available."
+            self._record_step_result(step, "failed", error=error)
+            self.state.transition(step, "failed", "missing_task_type", {"error": error})
+            return
+        task_input = payload.get("input") if isinstance(payload.get("input"), dict) else dict(self.intent.task_input)
+        task_options = payload.get("options") if isinstance(payload.get("options"), dict) else dict(self.intent.task_options)
+        if task_type == "skill_run" and self.skill_to_run and "skill_path" not in task_options:
+            task_options["skill_path"] = str(self.skill_to_run.skill_path)
+        try:
+            task_result = _route_task(
+                task_type=task_type,
+                task_input=task_input,
+                task_options=task_options,
+                project_root=self.root,
+                llm_client=self.llm_client,
+            )
+            self._record_task_result(task_result, include_artifacts=True, include_errors=True)
+            self._record_step_result(
+                step,
+                task_result.status,
+                task_id=task_result.run_id,
+                artifact_path=_relative_or_absolute(task_result.trace_path, self.root) if task_result.trace_path else None,
+                error=_first_error_message(task_result.errors),
+            )
+            self.state.transition(
+                step,
+                task_result.status,
+                "task_router_completed" if task_result.status == "completed" else "task_router_failed",
+                {"task_type": task_type, "run_id": task_result.run_id},
+            )
+        except Exception as exc:
+            error = {
+                "error_type": exc.__class__.__name__,
+                "message": str(exc),
+                "user_message": f"Task Router could not execute {task_type}.",
+                "recoverable": False,
+                "plan_step_id": step.step_id,
+                "plan_step_name": step.name,
+                "task_type": task_type,
+            }
+            self.errors.append(error)
+            self._record_step_result(step, "failed", error=str(exc))
+            self.state.transition(step, "failed", "task_router_failed", {"error": str(exc), "task_type": task_type})
+
     def _record_generated_skill(self, generated: GeneratedSkill, score: float, reasons: list[str]) -> None:
         self.generated_skill = generated
         self.skill_to_run = SkillCandidate(
@@ -268,6 +339,23 @@ class PlanExecutor:
         )
         self.artifacts.append({"type": "skill", "path": _relative_or_absolute(generated.skill_path, self.root)})
         self.artifacts.append({"type": "trace", "path": _relative_or_absolute(generated.trace_path, self.root)})
+
+    def _record_task_result(
+        self,
+        task_result: Any,
+        include_artifacts: bool = False,
+        include_errors: bool = False,
+    ) -> None:
+        self.task_results.append(task_result)
+        if include_errors and task_result.status == "failed":
+            self.errors.extend(_task_result_errors(task_result))
+        if not include_artifacts:
+            return
+        self.artifacts.extend(_string_artifacts(task_result.artifacts))
+        if task_result.trace_path:
+            trace_artifact = {"type": "trace", "path": _relative_or_absolute(task_result.trace_path, self.root)}
+            if trace_artifact not in self.artifacts:
+                self.artifacts.append(trace_artifact)
 
     def _record_run_result(self, step: PlanStep, run_result: SkillRunResult, note: str | None = None) -> str:
         self.run_results.append(run_result)
@@ -368,12 +456,16 @@ class PlanExecutor:
         return "completed", "all_executable_steps_completed"
 
     def _result(self, output_text: str) -> ExecutionResult:
+        if not output_text and self.task_results:
+            output_text = _task_result_output_text(self.task_results[-1])
         return ExecutionResult(
             action=self.plan.action,
             generated_skill=self.generated_skill,
             selected_skill=self.skill_to_run,
             run_result=self.run_results[0] if self.run_results else None,
+            task_result=self.task_results[-1] if self.task_results else None,
             run_results=self.run_results,
+            task_results=self.task_results,
             output_text=output_text,
             artifacts=self.artifacts,
             errors=self.errors,
@@ -417,6 +509,173 @@ def _execution_output_text(run_results: list[SkillRunResult]) -> str:
             ]
         )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _task_result_output_text(task_result: Any) -> str:
+    output = task_result.output if isinstance(task_result.output, dict) else {}
+    diagnosis = output.get("diagnosis")
+    if task_result.task_type == "trace_diagnosis" and isinstance(diagnosis, dict):
+        findings = diagnosis.get("findings") if isinstance(diagnosis.get("findings"), list) else []
+        lines = [
+            "# Task Router Result",
+            "",
+            "## Trace Diagnosis",
+            "",
+            f"- Trace type: {diagnosis.get('trace_type')}",
+            f"- Schema valid: {diagnosis.get('schema_valid')}",
+            f"- Steps: {diagnosis.get('step_count')}",
+            f"- Artifacts: {diagnosis.get('artifact_count')}",
+            f"- Errors: {diagnosis.get('error_count')}",
+        ]
+        if findings:
+            lines.extend(["", "## Findings", ""])
+            for finding in findings[:5]:
+                if isinstance(finding, dict):
+                    lines.append(f"- {finding.get('severity', 'info')}: {finding.get('message', '')}")
+        return "\n".join(lines).rstrip() + "\n"
+    analysis = output.get("analysis")
+    if task_result.task_type == "code_analysis" and isinstance(analysis, dict):
+        summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+        findings = analysis.get("findings") if isinstance(analysis.get("findings"), list) else []
+        lines = [
+            "# Task Router Result",
+            "",
+            "## Code Analysis",
+            "",
+            f"- Sources: {summary.get('source_count', 0)}",
+            f"- Lines: {summary.get('line_count', 0)}",
+            f"- Findings: {summary.get('finding_count', 0)}",
+            f"- High: {summary.get('high_count', 0)}",
+            f"- Medium: {summary.get('medium_count', 0)}",
+        ]
+        if findings:
+            lines.extend(["", "## Findings", ""])
+            for finding in findings[:6]:
+                if isinstance(finding, dict):
+                    location = f"{finding.get('source')}"
+                    if finding.get("line"):
+                        location = f"{location}:{finding.get('line')}"
+                    lines.append(f"- {finding.get('severity', 'info')}: {finding.get('message', '')} ({location})")
+        limitations = analysis.get("limitations") if isinstance(analysis.get("limitations"), list) else []
+        if limitations:
+            lines.extend(["", "## Limitations", ""])
+            lines.extend(f"- {item}" for item in limitations[:3])
+        return "\n".join(lines).rstrip() + "\n"
+    if task_result.task_type == "document_analysis" and isinstance(analysis, dict):
+        summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+        findings = analysis.get("findings") if isinstance(analysis.get("findings"), list) else []
+        lines = [
+            "# Task Router Result",
+            "",
+            "## Document Analysis",
+            "",
+            f"- Documents: {summary.get('document_count', 0)}",
+            f"- Words: {summary.get('word_count', 0)}",
+            f"- Headings: {summary.get('heading_count', 0)}",
+            f"- Findings: {summary.get('finding_count', 0)}",
+        ]
+        if findings:
+            lines.extend(["", "## Findings", ""])
+            for finding in findings[:6]:
+                if isinstance(finding, dict):
+                    lines.append(f"- {finding.get('severity', 'info')}: {finding.get('message', '')} ({finding.get('source', 'document')})")
+        limitations = analysis.get("limitations") if isinstance(analysis.get("limitations"), list) else []
+        if limitations:
+            lines.extend(["", "## Limitations", ""])
+            lines.extend(f"- {item}" for item in limitations[:3])
+        return "\n".join(lines).rstrip() + "\n"
+    if task_result.task_type == "data_analysis" and isinstance(analysis, dict):
+        summary = analysis.get("summary") if isinstance(analysis.get("summary"), dict) else {}
+        findings = analysis.get("findings") if isinstance(analysis.get("findings"), list) else []
+        lines = [
+            "# Task Router Result",
+            "",
+            "## Data Analysis",
+            "",
+            f"- Sources: {summary.get('source_count', 0)}",
+            f"- Rows: {summary.get('row_count', 0)}",
+            f"- Columns: {summary.get('column_count', 0)}",
+            f"- Missing values: {summary.get('missing_value_count', 0)}",
+            f"- Findings: {summary.get('finding_count', 0)}",
+        ]
+        if findings:
+            lines.extend(["", "## Findings", ""])
+            for finding in findings[:6]:
+                if isinstance(finding, dict):
+                    lines.append(f"- {finding.get('severity', 'info')}: {finding.get('message', '')} ({finding.get('source', 'data')})")
+        limitations = analysis.get("limitations") if isinstance(analysis.get("limitations"), list) else []
+        if limitations:
+            lines.extend(["", "## Limitations", ""])
+            lines.extend(f"- {item}" for item in limitations[:3])
+        return "\n".join(lines).rstrip() + "\n"
+    if task_result.status == "failed":
+        return f"Task Router could not complete {task_result.task_type}."
+    return f"Task Router completed {task_result.task_type}."
+
+
+def _task_result_errors(task_result: Any) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    for error in task_result.errors:
+        if not isinstance(error, dict):
+            continue
+        errors.append(
+            {
+                "error_type": str(error.get("error_type") or "TaskRouterError"),
+                "message": str(error.get("message") or error),
+                "user_message": str(error.get("user_message") or error.get("message") or "Task Router task failed."),
+                "recoverable": bool(error.get("recoverable", False)),
+                "task_type": task_result.task_type,
+                "run_id": task_result.run_id,
+            }
+        )
+    if task_result.status == "failed" and not errors:
+        errors.append(
+            {
+                "error_type": "TaskRouterError",
+                "message": f"Task Router task failed: {task_result.task_type}",
+                "user_message": f"Task Router could not complete {task_result.task_type}.",
+                "recoverable": False,
+                "task_type": task_result.task_type,
+                "run_id": task_result.run_id,
+            }
+        )
+    return errors
+
+
+def _route_task(
+    task_type: str,
+    task_input: dict[str, Any],
+    task_options: dict[str, Any],
+    project_root: Path,
+    llm_client: LLMClient | None,
+) -> Any:
+    from agentforge.tasks.router import route_task
+    from agentforge.tasks.schemas import TaskRequest
+
+    return route_task(
+        TaskRequest(task_type=task_type, input=task_input, options=task_options),
+        project_root=project_root,
+        llm_client=llm_client,
+    )
+
+
+def _string_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_type = artifact.get("type")
+        path = artifact.get("path")
+        if isinstance(artifact_type, str) and isinstance(path, str):
+            normalized.append({"type": artifact_type, "path": path})
+    return normalized
+
+
+def _first_error_message(errors: list[dict[str, Any]]) -> str | None:
+    for error in errors:
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+    return None
 
 
 def _step_task_id(step: PlanStep) -> Any:

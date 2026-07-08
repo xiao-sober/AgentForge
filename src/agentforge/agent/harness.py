@@ -22,7 +22,6 @@ from agentforge.agent.tool_calling import (
     registry_model_schemas,
 )
 from agentforge.agent.tool_calling.model_planner import ToolCallingPlanner
-from agentforge.agent.tools import AgentTool, ToolCall, ToolErrorSpec, ToolRegistry, ToolResult, ToolSchema
 from agentforge.common.file_store import write_json
 from agentforge.common.llm_client import LLMClient
 from agentforge.common.trace import utc_now_iso, write_trace
@@ -32,6 +31,8 @@ from agentforge.hqs.system_evaluator import SystemHQSReport, evaluate_system
 from agentforge.memory.memory_manager import MemoryManager
 from agentforge.skill_evolver.evolution_loop import evolve_skill
 from agentforge.skill_evolver.version_manager import parse_skill_version_path
+from agentforge.tools import AgentTool, ToolCall, ToolErrorSpec, ToolRegistry, ToolResult, ToolSchema
+from agentforge.workflows import WorkflowRunner
 
 
 @dataclass(frozen=True)
@@ -134,10 +135,39 @@ class AgentHarness:
 
     def chat(self, user_input: str) -> AgentChatResult:
         run = AgentRun.create(user_input)
+        run_service = WorkflowRunner.for_task(
+            self.project_root,
+            workflow_id="agent_chat_workflow",
+            task_type="agent_chat",
+            steps=[
+                "receive_input",
+                "parse_intent",
+                "retrieve_memory_context",
+                "select_skill",
+                "build_plan",
+                "execute_plan",
+                "observe_execution",
+                "update_semantic_memory",
+                "build_response",
+                "evaluate_response_hqs",
+                "hqs_gate",
+                "replan_response",
+                "reflect",
+                "reinforcement_check",
+                "save_episode_memory",
+            ],
+        )
+        run_service.start_run(
+            task_type="agent_chat",
+            title="Agent chat",
+            input_data={"message": user_input},
+            run_id=run.run_id,
+            created_at=run.created_at,
+        )
         errors: list[dict[str, Any]] = []
         artifacts: list[dict[str, str]] = []
         state: dict[str, Any] = {"user_input": user_input, "quality_retry_count": 0}
-        loop = AgentRunLoop(run, self._build_tool_registry(state, run, errors, artifacts), self.memory)
+        loop = AgentRunLoop(run, self._build_tool_registry(state, run, errors, artifacts), self.memory, run_service=run_service)
 
         loop.execute(ToolCall("receive_input", {"message": user_input}))
         loop.execute(ToolCall("parse_intent", {"message": user_input}))
@@ -219,6 +249,19 @@ class AgentHarness:
             }
         )
         _append_system_hqs_to_trace(trace_path, system_hqs)
+        run_service.record_run(
+            task_type="agent_chat",
+            title="Agent chat",
+            input_data={"message": user_input},
+            output_data={**trace_output, "system_hqs": system_hqs.to_dict()},
+            trace_path=trace_path,
+            status=run.status,
+            run_id=run.run_id,
+            steps=[step.to_dict() for step in run.steps],
+            artifacts=artifacts,
+            hqs_reports={"response": response_hqs.to_dict(), "system": system_hqs.to_dict()},
+            created_at=run.created_at,
+        )
         self.memory.add_working_memory(
             {
                 "active_run": run.to_dict(),
@@ -253,12 +296,37 @@ class AgentHarness:
         policy: ToolCallPolicy | None = None,
     ) -> AgentToolChatResult:
         run = AgentRun.create(user_input)
+        run_service = WorkflowRunner.for_task(
+            self.project_root,
+            workflow_id="tool_calling_agent_workflow",
+            task_type="tool_calling_agent",
+            steps=[
+                "receive_input",
+                "parse_intent",
+                "retrieve_memory_context",
+                "inspect_latest_trace",
+                "select_skill",
+                "build_plan",
+                "execute_plan",
+                "observe_execution",
+                "build_response",
+                "evaluate_response_hqs",
+                "replan_response",
+            ],
+        )
+        run_service.start_run(
+            task_type="tool_calling_agent",
+            title="Tool-calling agent chat",
+            input_data={"message": user_input},
+            run_id=run.run_id,
+            created_at=run.created_at,
+        )
         errors: list[dict[str, Any]] = []
         artifacts: list[dict[str, str]] = []
         state: dict[str, Any] = {"user_input": user_input, "quality_retry_count": 0}
         registry = self._build_tool_registry(state, run, errors, artifacts)
 
-        setup_loop = AgentRunLoop(run, registry, self.memory)
+        setup_loop = AgentRunLoop(run, registry, self.memory, run_service=run_service)
         setup_loop.execute(ToolCall("receive_input", {"message": user_input}))
         setup_loop.execute(ToolCall("parse_intent", {"message": user_input}))
 
@@ -275,6 +343,7 @@ class AgentHarness:
             active_policy,
             runtime_state=state,
             available_tools=available_tools,
+            run_service=run_service,
         )
         loop_result = tool_loop.run_loop()
 
@@ -329,7 +398,7 @@ class AgentHarness:
         if hqs_gate.get("decision") == "retry_response":
             state["quality_retry_count"] = int(state.get("quality_retry_count") or 0) + 1
             state["response_guidance"] = hqs_gate
-            retry_loop = AgentRunLoop(run, registry, self.memory)
+            retry_loop = AgentRunLoop(run, registry, self.memory, run_service=run_service)
             replan_result = retry_loop.execute(ToolCall("replan_response"))
             build_result = retry_loop.execute(ToolCall("build_response"))
             _mark_plan_tool_status(state, "build_response", build_result.status)
@@ -471,6 +540,19 @@ class AgentHarness:
             }
         )
         _append_system_hqs_to_trace(trace_path, system_hqs)
+        run_service.record_run(
+            task_type="tool_calling_agent",
+            title="Tool-calling agent chat",
+            input_data={"message": user_input},
+            output_data={**trace_output, "system_hqs": system_hqs.to_dict()},
+            trace_path=trace_path,
+            status=run.status,
+            run_id=run.run_id,
+            steps=[step.to_dict() for step in run.steps],
+            artifacts=artifacts,
+            hqs_reports={"response": response_hqs.to_dict(), "system": system_hqs.to_dict()},
+            created_at=run.created_at,
+        )
         self.memory.add_working_memory(
             {
                 "active_run": run.to_dict(),
@@ -502,6 +584,19 @@ class AgentHarness:
             parse_repair_count=parse_repair_count,
             invalid_call_count=loop_result.state.invalid_call_count,
         )
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        return self._tool_catalog_registry().list_tools()
+
+    def get_tool(self, name: str) -> dict[str, Any] | None:
+        try:
+            return self._tool_catalog_registry().get(name).to_dict()
+        except ValueError:
+            return None
+
+    def _tool_catalog_registry(self) -> ToolRegistry:
+        run = AgentRun.create("__tool_catalog__")
+        return self._build_tool_registry({}, run, [], [])
 
     def _build_tool_registry(
         self,

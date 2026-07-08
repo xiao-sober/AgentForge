@@ -78,6 +78,12 @@ class MemoryManager:
         records = read_jsonl(self.paths.episodes)
         return _rank_records(records, query, limit)
 
+    def list_episodes(self, limit: int = 50) -> list[dict[str, Any]]:
+        records = read_jsonl(self.paths.episodes)
+        if limit <= 0:
+            return records
+        return records[-limit:]
+
     def upsert_semantic_memory(self, key: str, value: dict[str, Any]) -> dict[str, Any]:
         if not key.strip():
             raise ValueError("Semantic memory key cannot be empty.")
@@ -104,6 +110,14 @@ class MemoryManager:
         semantic = read_json_object(self.paths.semantic, default={})
         records = [value for value in semantic.values() if isinstance(value, dict)]
         return _rank_records(records, query, limit)
+
+    def list_semantic_memory(self, limit: int = 50) -> list[dict[str, Any]]:
+        semantic = read_json_object(self.paths.semantic, default={})
+        records = [value for value in semantic.values() if isinstance(value, dict)]
+        records.sort(key=lambda item: str(item.get("updated_at") or item.get("key") or ""), reverse=True)
+        if limit <= 0:
+            return records
+        return records[:limit]
 
     def retrieve_context_for_task(self, task_text: str, limit: int = 5) -> dict[str, Any]:
         episodes = self.search_episodes(task_text, limit=limit)

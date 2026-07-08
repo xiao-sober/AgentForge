@@ -14,10 +14,12 @@ from agentforge.common.llm_client import LLMProviderError
 from agentforge.hqs.system_evaluator import evaluate_system
 from agentforge.memory.memory_manager import MemoryManager
 from agentforge.providers import ProviderConfigError, create_llm_client, load_provider_config
+from agentforge.runs.service import RunService
 from agentforge.skill_evolver.evolution_loop import evolve_skill
 from agentforge.skill_evolver.skill_runner import run_skill
 from agentforge.skill_evolver.task_loader import load_taskset
 from agentforge.skill_generator.generator import generate_skill_from_input
+from agentforge.tasks import TaskRequest, list_task_types, route_task
 
 
 @dataclass(frozen=True)
@@ -77,14 +79,36 @@ def handle_request(
             return _run_skill(body, root)
         if method == "POST" and path_parts == ["skills", "evolve"]:
             return _evolve_skill(body, root)
+        if method == "POST" and path_parts == ["tasks"]:
+            return _task(body, root)
+        if method == "GET" and path_parts == ["tasks", "types"]:
+            return _task_types()
+        if method == "GET" and path_parts == ["tools"]:
+            return _tools(root)
+        if method == "GET" and len(path_parts) == 2 and path_parts[0] == "tools":
+            return _tool_detail(root, path_parts[1])
         if method == "GET" and path_parts == ["skills"]:
             return _skills(root)
         if method == "GET" and path_parts == ["tasksets"]:
             return _tasksets(root)
+        if method == "GET" and path_parts == ["runs"]:
+            return _runs(root, query=parse_qs(parsed.query))
+        if method == "GET" and len(path_parts) == 2 and path_parts[0] == "runs":
+            return _run_detail(root, path_parts[1])
+        if method == "GET" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "steps":
+            return _run_steps(root, path_parts[1])
+        if method == "GET" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "artifacts":
+            return _run_artifacts(root, path_parts[1])
+        if method == "GET" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "tool-calls":
+            return _run_tool_calls(root, path_parts[1])
         if method == "GET" and len(path_parts) == 2 and path_parts[0] == "skills":
             return _skill_detail(root, path_parts[1])
         if method == "GET" and len(path_parts) == 3 and path_parts[0] == "skills":
             return _skill_version(root, path_parts[1], path_parts[2])
+        if method == "GET" and path_parts == ["memory", "episodes"]:
+            return _memory_episodes(root, query=parse_qs(parsed.query))
+        if method == "GET" and path_parts == ["memory", "semantic"]:
+            return _memory_semantic(root, query=parse_qs(parsed.query))
         if method == "GET" and path_parts == ["memory"]:
             return _memory(root)
         if method == "GET" and len(path_parts) == 3 and path_parts[:2] == ["agent", "runs"]:
@@ -148,6 +172,7 @@ def _generate_skill(body: bytes | str | None, root: Path) -> WebResponse:
         "relative_skill_path": _relative_or_absolute(result.skill_path, root),
         "trace_path": str(result.trace_path),
         "trace_url": _trace_url(result.trace_path),
+        "run_id": result.run_id,
         "valid": result.validation_result.valid,
         "missing_sections": result.validation_result.missing_sections,
         "generation_mode": result.generation_mode,
@@ -171,6 +196,7 @@ def _run_skill(body: bytes | str | None, root: Path) -> WebResponse:
         "result_path": str(result.result_path),
         "trace_path": str(result.trace_path),
         "trace_url": _trace_url(result.trace_path),
+        "run_id": result.run_id,
         "mode": result.mode,
         "output": output,
         "outputs": [item.to_dict() for item in result.outputs],
@@ -219,11 +245,43 @@ def _evolve_skill(body: bytes | str | None, root: Path) -> WebResponse:
         "relative_final_skill_path": _relative_or_absolute(result.final_skill_path, root),
         "trace_path": str(result.trace_path),
         "trace_url": _trace_url(result.trace_path),
+        "run_id": result.run_id,
         "stop_reason": result.stop_reason,
         "iterations": iterations,
         "warnings": provider_selection.warnings,
     }
     return _json(200, response)
+
+
+def _task(body: bytes | str | None, root: Path) -> WebResponse:
+    payload = _decode_json_body(body)
+    provider_selection = _optional_llm_client(payload, root)
+    result = route_task(
+        TaskRequest.from_payload(payload),
+        project_root=root,
+        llm_client=provider_selection.client,
+    )
+    response = result.to_dict()
+    if result.trace_path is not None:
+        response["trace_url"] = _trace_url(result.trace_path)
+    return _json(200, _with_provider_warnings(response, provider_selection.warnings))
+
+
+def _task_types() -> WebResponse:
+    return _json(200, {"task_types": list_task_types()})
+
+
+def _tools(root: Path) -> WebResponse:
+    tools = AgentHarness(project_root=root).list_tools()
+    return _json(200, {"tools": tools, "count": len(tools)})
+
+
+def _tool_detail(root: Path, tool_name: str) -> WebResponse:
+    tool_name = _safe_path_segment(tool_name, "Tool name")
+    tool = AgentHarness(project_root=root).get_tool(tool_name)
+    if tool is None:
+        return _json(404, {"error": f"Tool not found: {tool_name}"})
+    return _json(200, tool)
 
 
 def _index(root: Path) -> WebResponse:
@@ -308,6 +366,47 @@ def _tasksets(root: Path) -> WebResponse:
     return _json(200, {"tasksets": tasksets})
 
 
+def _runs(root: Path, query: dict[str, list[str]] | None = None) -> WebResponse:
+    service = RunService(root)
+    limit = _query_int(query or {}, "limit", 50)
+    task_type = _query_string(query or {}, "task_type")
+    status = _query_string(query or {}, "status")
+    runs = [run.to_dict() for run in service.repository.list_runs(limit=limit, task_type=task_type, status=status)]
+    return _json(200, {"runs": runs, "count": len(runs)})
+
+
+def _run_detail(root: Path, run_id: str) -> WebResponse:
+    run_id = _safe_path_segment(run_id, "Run id")
+    detail = RunService(root).run_detail(run_id)
+    if detail is None:
+        return _json(404, {"error": f"Run not found: {run_id}"})
+    return _json(200, detail)
+
+
+def _run_steps(root: Path, run_id: str) -> WebResponse:
+    run_id = _safe_path_segment(run_id, "Run id")
+    repository = RunService(root).repository
+    if repository.get_run(run_id) is None:
+        return _json(404, {"error": f"Run not found: {run_id}"})
+    return _json(200, {"run_id": run_id, "steps": [step.to_dict() for step in repository.list_run_steps(run_id)]})
+
+
+def _run_artifacts(root: Path, run_id: str) -> WebResponse:
+    run_id = _safe_path_segment(run_id, "Run id")
+    repository = RunService(root).repository
+    if repository.get_run(run_id) is None:
+        return _json(404, {"error": f"Run not found: {run_id}"})
+    return _json(200, {"run_id": run_id, "artifacts": [item.to_dict() for item in repository.list_artifacts(run_id)]})
+
+
+def _run_tool_calls(root: Path, run_id: str) -> WebResponse:
+    run_id = _safe_path_segment(run_id, "Run id")
+    repository = RunService(root).repository
+    if repository.get_run(run_id) is None:
+        return _json(404, {"error": f"Run not found: {run_id}"})
+    return _json(200, {"run_id": run_id, "tool_calls": [item.to_dict() for item in repository.list_tool_calls(run_id)]})
+
+
 def _skill_detail(root: Path, skill_name: str) -> WebResponse:
     skill_name = _safe_path_segment(skill_name, "Skill name")
     skills = [skill for skill in list_available_skills(root) if skill["skill_slug"] == skill_name]
@@ -369,6 +468,48 @@ def _read_skill_diff(skill_path: Path, metadata: dict[str, Any] | None, root: Pa
 
 def _memory(root: Path) -> WebResponse:
     return _json(200, MemoryManager(root, trace_updates=False).summary())
+
+
+def _memory_episodes(root: Path, query: dict[str, list[str]] | None = None) -> WebResponse:
+    memory = MemoryManager(root, trace_updates=False)
+    query = query or {}
+    limit = _query_int(query, "limit", 50)
+    search_query = _query_string(query, "q") or _query_string(query, "query")
+    episodes = memory.search_episodes(search_query, limit=limit) if search_query else memory.list_episodes(limit=limit)
+    total_count = len(memory.list_episodes(limit=0))
+    return _json(
+        200,
+        {
+            "episodes": episodes,
+            "count": len(episodes),
+            "total_count": total_count,
+            "limit": limit,
+            "query": search_query,
+        },
+    )
+
+
+def _memory_semantic(root: Path, query: dict[str, list[str]] | None = None) -> WebResponse:
+    memory = MemoryManager(root, trace_updates=False)
+    query = query or {}
+    limit = _query_int(query, "limit", 50)
+    search_query = _query_string(query, "q") or _query_string(query, "query")
+    semantic_records = (
+        memory.search_semantic_memory(search_query, limit=limit)
+        if search_query
+        else memory.list_semantic_memory(limit=limit)
+    )
+    total_count = len(memory.list_semantic_memory(limit=0))
+    return _json(
+        200,
+        {
+            "semantic_memory": semantic_records,
+            "count": len(semantic_records),
+            "total_count": total_count,
+            "limit": limit,
+            "query": search_query,
+        },
+    )
 
 
 def _traces(root: Path) -> WebResponse:
@@ -595,12 +736,14 @@ def _compact_chat_payload(result: Any) -> dict[str, Any]:
             "type": result.intent.intent_type,
             "confidence": result.intent.confidence,
             "requires_skill": result.intent.requires_skill,
+            "task_type": result.intent.task_type,
         },
         "plan": {
             "action": result.plan.action,
             "steps": _completed_plan_steps(result.plan.to_dict().get("steps", [])),
         },
         "selected_skill": _compact_skill(selected),
+        "task_result": result.execution.task_result.to_dict() if result.execution.task_result else None,
         "reinforcement": result.reinforcement,
         "reflection": result.reflection,
         "stop_reason": result.stop_reason,
@@ -770,6 +913,24 @@ def _wants_debug(payload: dict[str, Any], query: dict[str, list[str]]) -> bool:
     return any(value.lower() in {"1", "true", "yes"} for value in values)
 
 
+def _query_string(query: dict[str, list[str]], key: str) -> str | None:
+    values = query.get(key, [])
+    if not values:
+        return None
+    value = values[0].strip()
+    return value or None
+
+
+def _query_int(query: dict[str, list[str]], key: str, default: int) -> int:
+    value = _query_string(query, key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"Query parameter '{key}' must be an integer.") from exc
+
+
 def _agent_mode(payload: dict[str, Any], query: dict[str, list[str]]) -> str:
     raw = payload.get("agent_mode")
     if not isinstance(raw, str):
@@ -785,6 +946,8 @@ def _agent_mode(payload: dict[str, Any], query: dict[str, list[str]]) -> str:
 
 def _compact_tool_chat_payload(result: Any) -> dict[str, Any]:
     state = result.tool_calling.state
+    intent_payload = _tool_chat_intent_payload(result)
+    task_result = _tool_chat_task_result_payload(result)
     return {
         "run_id": result.run.run_id,
         "agent_mode": result.agent_mode,
@@ -800,6 +963,8 @@ def _compact_tool_chat_payload(result: Any) -> dict[str, Any]:
         "final_answer_source": result.final_answer_source,
         "hqs_gate": result.hqs_gate,
         "quality_retry": result.quality_retry,
+        "intent": _compact_intent_payload(intent_payload),
+        "task_result": task_result,
         "tool_calling": {
             "status": state.status,
             "iteration": state.iteration,
@@ -816,6 +981,32 @@ def _compact_tool_chat_payload(result: Any) -> dict[str, Any]:
         "memory_retrieval": result.memory_context.get("retrieval") if isinstance(result.memory_context, dict) else None,
         "stop_reason": result.stop_reason,
         "debug_url_hint": "POST /chat with {\"debug\": true, \"agent_mode\": \"tool_calling\"} for full payload.",
+    }
+
+
+def _tool_chat_intent_payload(result: Any) -> dict[str, Any]:
+    episode = result.episode if isinstance(getattr(result, "episode", None), dict) else {}
+    intent = episode.get("intent")
+    return intent if isinstance(intent, dict) else {}
+
+
+def _tool_chat_task_result_payload(result: Any) -> dict[str, Any] | None:
+    episode = result.episode if isinstance(getattr(result, "episode", None), dict) else {}
+    execution = episode.get("execution")
+    if not isinstance(execution, dict):
+        return None
+    task_result = execution.get("task_result")
+    return task_result if isinstance(task_result, dict) else None
+
+
+def _compact_intent_payload(intent_payload: dict[str, Any]) -> dict[str, Any]:
+    intent_type = intent_payload.get("intent_type") or intent_payload.get("type")
+    return {
+        "type": intent_type,
+        "intent_type": intent_type,
+        "confidence": intent_payload.get("confidence"),
+        "requires_skill": intent_payload.get("requires_skill"),
+        "task_type": intent_payload.get("task_type"),
     }
 
 

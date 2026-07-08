@@ -18,6 +18,10 @@ ALLOWED_TRACE_TYPES = {
     "tool_calling_agent",
     "memory_update",
     "hqs_diagnosis",
+    "trace_diagnosis",
+    "code_analysis",
+    "document_analysis",
+    "data_analysis",
 }
 
 

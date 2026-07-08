@@ -4,9 +4,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agentforge.agent.run import AgentRun
-from agentforge.agent.tools import ToolCall, ToolRegistry, ToolResult
 from agentforge.common.trace import utc_now_iso
 from agentforge.memory.memory_manager import MemoryManager
+from agentforge.runs.service import RunService
+from agentforge.tools import ToolCall, ToolRegistry, ToolResult
 
 
 TOOL_PHASES = {
@@ -51,10 +52,12 @@ class AgentRunLoop:
         registry: ToolRegistry,
         memory: MemoryManager,
         max_iterations: int = 2,
+        run_service: RunService | None = None,
     ) -> None:
         self.run = run
         self.registry = registry
         self.memory = memory
+        self.run_service = run_service
         self.state = AgentRunLoopState(max_iterations=max_iterations)
 
     def execute(self, call: ToolCall) -> ToolResult:
@@ -75,7 +78,12 @@ class AgentRunLoop:
         try:
             if tool is None:
                 raise ValueError(f"Tool is not registered: {call.tool_name}")
-            result = self.registry.execute(call)
+            result = self.registry.execute(
+                call,
+                run_id=self.run.run_id if self.run_service is not None else None,
+                step_id=_persistent_step_id(self.run.run_id, step.step_id) if self.run_service is not None else None,
+                run_service=self.run_service,
+            )
         except Exception as exc:
             result = ToolResult(
                 output={},
@@ -98,6 +106,18 @@ class AgentRunLoop:
         )
         self.state.phase = phase
         self.state.tool_results.append({"call": call.to_dict(), "result": result.to_dict()})
+        if self.run_service is not None:
+            step_payload = step.to_dict()
+            self.run_service.record_step(self.run.run_id, step_payload, len(self.run.steps))
+            self.run_service.update_run(
+                self.run.run_id,
+                status="failed" if result.status == "failed" else "running",
+                output_data={
+                    "phase": self.run.phase,
+                    "last_step": step_payload,
+                    "step_count": len(self.run.steps),
+                },
+            )
         self.memory.add_working_memory(
             {
                 "active_run_id": self.run.run_id,
@@ -122,3 +142,7 @@ class AgentRunLoop:
 
 def _phase_for_tool(tool_name: str) -> str:
     return TOOL_PHASES.get(tool_name, "executing")
+
+
+def _persistent_step_id(run_id: str, step_id: str) -> str:
+    return step_id if step_id.startswith(f"{run_id}_") else f"{run_id}_{step_id}"

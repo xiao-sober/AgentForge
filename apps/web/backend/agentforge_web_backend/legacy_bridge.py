@@ -15,13 +15,16 @@ LEGACY_API_PATHS = {
     "config",
     "chat",
     "skills",
+    "tasks",
+    "tools",
     "tasksets",
+    "runs",
     "memory",
     "traces",
     "hqs",
 }
 
-LEGACY_API_PREFIXES = ("agent/runs/", "skills/", "traces/")
+LEGACY_API_PREFIXES = ("agent/runs/", "runs/", "skills/", "tasks/", "tools/", "traces/")
 
 
 async def dispatch_legacy_request(request: Request, path: str, *, prefix_api_urls: bool = True) -> Response:

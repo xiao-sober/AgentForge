@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agentforge.memory.memory_manager import MemoryManager
 from agentforge.web.routes import handle_request
 
 
@@ -112,6 +113,15 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(hqs.status, 200)
             self.assertIsNotNone(hqs.payload["last_response_hqs"])
 
+            runs = handle_request("GET", "/runs", project_root=root)
+            self.assertEqual(runs.status, 200)
+            self.assertTrue(any(run["run_id"] == chat.payload["run_id"] for run in runs.payload["runs"]))
+
+            run_detail = handle_request("GET", f"/runs/{chat.payload['run_id']}", project_root=root)
+            self.assertEqual(run_detail.status, 200)
+            self.assertEqual(run_detail.payload["task_type"], "agent_chat")
+            self.assertTrue(run_detail.payload["steps"])
+
     def test_trace_detail_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -136,6 +146,50 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(response.payload["traces"][0]["filename"], "bad.json")
             self.assertIn("error", response.payload["traces"][0])
+
+    def test_phase_6_tools_routes_return_tool_catalog(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            tools = handle_request("GET", "/tools", project_root=root)
+            self.assertEqual(tools.status, 200)
+            tool_names = {tool["name"] for tool in tools.payload["tools"]}
+            self.assertIn("parse_intent", tool_names)
+            self.assertIn("execute_plan", tool_names)
+            self.assertEqual(tools.payload["count"], len(tools.payload["tools"]))
+
+            detail = handle_request("GET", "/tools/execute_plan", project_root=root)
+            self.assertEqual(detail.status, 200)
+            self.assertEqual(detail.payload["name"], "execute_plan")
+            self.assertEqual(detail.payload["permission_level"], "execute")
+            self.assertIn("input_schema", detail.payload)
+            self.assertIn("output_schema", detail.payload)
+
+            missing = handle_request("GET", "/tools/not_registered", project_root=root)
+            self.assertEqual(missing.status, 404)
+
+    def test_phase_6_memory_routes_return_episodes_and_semantic_memory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            memory = MemoryManager(root, trace_updates=False)
+            episode = memory.save_episode({"user_input": "Review dashboard layout.", "response": "Done."})
+            memory.save_episode({"user_input": "Trace diagnosis run.", "response": "Trace ok."})
+            memory.upsert_semantic_memory("ui_review_skill", {"summary": "UI review helper", "tags": ["ui"]})
+
+            episodes = handle_request("GET", "/memory/episodes?limit=1", project_root=root)
+            self.assertEqual(episodes.status, 200)
+            self.assertEqual(episodes.payload["count"], 1)
+            self.assertEqual(episodes.payload["total_count"], 2)
+
+            searched = handle_request("GET", "/memory/episodes?q=dashboard", project_root=root)
+            self.assertEqual(searched.status, 200)
+            self.assertEqual(searched.payload["episodes"][0]["episode_id"], episode["episode_id"])
+            self.assertGreater(searched.payload["episodes"][0]["_memory_score"], 0)
+
+            semantic = handle_request("GET", "/memory/semantic?q=ui", project_root=root)
+            self.assertEqual(semantic.status, 200)
+            self.assertEqual(semantic.payload["semantic_memory"][0]["key"], "ui_review_skill")
+            self.assertEqual(semantic.payload["total_count"], 1)
 
     def test_run_skill_rejects_external_skill_path(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -282,6 +336,9 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(generated.status, 200)
             self.assertTrue(generated.payload["valid"])
             self.assertIn("skill_path", generated.payload)
+            self.assertTrue(generated.payload["run_id"].startswith("run_"))
+            generated_run = handle_request("GET", f"/runs/{generated.payload['run_id']}", project_root=root)
+            self.assertEqual(generated_run.payload["task_type"], "skill_generate")
 
             run = handle_request(
                 "POST",
@@ -297,6 +354,9 @@ class WebRoutesTest(unittest.TestCase):
             self.assertEqual(run.status, 200)
             self.assertEqual(run.payload["mode"], "local")
             self.assertIn("Skill Run Output", run.payload["output"])
+            self.assertTrue(run.payload["run_id"].startswith("run_"))
+            skill_run = handle_request("GET", f"/runs/{run.payload['run_id']}", project_root=root)
+            self.assertEqual(skill_run.payload["task_type"], "skill_run")
 
             evolved = handle_request(
                 "POST",
@@ -315,6 +375,179 @@ class WebRoutesTest(unittest.TestCase):
             self.assertIn("final_skill_path", evolved.payload)
             self.assertEqual(len(evolved.payload["iterations"]), 1)
             self.assertIn("quality_gate", evolved.payload["iterations"][0])
+            self.assertTrue(evolved.payload["run_id"].startswith("run_"))
+            evolve_run = handle_request("GET", f"/runs/{evolved.payload['run_id']}", project_root=root)
+            self.assertEqual(evolve_run.payload["task_type"], "skill_evolve")
+
+    def test_task_routes_expose_types_and_run_trace_diagnosis(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            chat = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps({"message": "Review dashboard layout readability."}),
+                project_root=root,
+            )
+            task_types = handle_request("GET", "/tasks/types", project_root=root)
+            self.assertEqual(task_types.status, 200)
+            self.assertTrue(any(item["task_type"] == "trace_diagnosis" for item in task_types.payload["task_types"]))
+
+            task = handle_request(
+                "POST",
+                "/tasks",
+                body=json.dumps(
+                    {
+                        "task_type": "trace_diagnosis",
+                        "input": {"run_id": chat.payload["run_id"]},
+                    }
+                ),
+                project_root=root,
+            )
+
+            self.assertEqual(task.status, 200)
+            self.assertEqual(task.payload["task_type"], "trace_diagnosis")
+            self.assertEqual(task.payload["status"], "completed")
+            self.assertIn("trace_url", task.payload)
+            self.assertEqual(task.payload["output"]["diagnosis"]["trace_type"], "agent_chat")
+            runs = handle_request("GET", "/runs?task_type=trace_diagnosis", project_root=root)
+            self.assertTrue(any(run["run_id"] == task.payload["run_id"] for run in runs.payload["runs"]))
+            detail = handle_request("GET", f"/runs/{task.payload['run_id']}", project_root=root)
+            self.assertTrue(detail.payload["workflow_checkpoints"])
+
+    def test_chat_routes_trace_diagnosis_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps({"message": "hello"}),
+                project_root=root,
+            )
+
+            response = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps({"message": "Inspect the latest trace."}),
+                project_root=root,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.payload["intent"]["task_type"], "trace_diagnosis")
+            self.assertEqual(response.payload["plan"]["action"], "route_task")
+            self.assertEqual(response.payload["task_result"]["task_type"], "trace_diagnosis")
+            self.assertEqual(response.payload["task_result"]["status"], "completed")
+
+    def test_chat_routes_code_analysis_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            response = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps(
+                    {
+                        "message": (
+                            "Analyze this Python function.\n"
+                            "```python\n"
+                            "def run(value):\n"
+                            "    return eval(value)\n"
+                            "```\n"
+                        )
+                    }
+                ),
+                project_root=root,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.payload["intent"]["task_type"], "code_analysis")
+            self.assertEqual(response.payload["plan"]["action"], "route_task")
+            self.assertEqual(response.payload["task_result"]["task_type"], "code_analysis")
+            self.assertEqual(response.payload["task_result"]["status"], "completed")
+            self.assertIn("Code Analysis", response.payload["response"])
+
+    def test_chat_routes_document_analysis_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            response = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps(
+                    {
+                        "message": (
+                            "Analyze this document.\n"
+                            "# Release Notes\n\n"
+                            "TODO: fill in details.\n\n"
+                            "## Scope\n"
+                            "This document describes rollout scope."
+                        )
+                    }
+                ),
+                project_root=root,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.payload["intent"]["task_type"], "document_analysis")
+            self.assertEqual(response.payload["plan"]["action"], "route_task")
+            self.assertEqual(response.payload["task_result"]["task_type"], "document_analysis")
+            self.assertEqual(response.payload["task_result"]["status"], "completed")
+            self.assertIn("Document Analysis", response.payload["response"])
+
+    def test_chat_routes_data_analysis_task(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            response = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps(
+                    {
+                        "message": (
+                            "Analyze this CSV dataset.\n"
+                            "```csv\n"
+                            "name,score\n"
+                            "Ada,10\n"
+                            "Bob,\n"
+                            "```\n"
+                        )
+                    }
+                ),
+                project_root=root,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.payload["intent"]["task_type"], "data_analysis")
+            self.assertEqual(response.payload["plan"]["action"], "route_task")
+            self.assertEqual(response.payload["task_result"]["task_type"], "data_analysis")
+            self.assertEqual(response.payload["task_result"]["status"], "completed")
+            self.assertIn("Data Analysis", response.payload["response"])
+
+    def test_tool_calling_chat_compact_payload_exposes_task_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            response = handle_request(
+                "POST",
+                "/chat",
+                body=json.dumps(
+                    {
+                        "agent_mode": "tool_calling",
+                        "message": (
+                            "Analyze this Python function.\n"
+                            "```python\n"
+                            "def run(value):\n"
+                            "    return eval(value)\n"
+                            "```\n"
+                        ),
+                    }
+                ),
+                project_root=root,
+            )
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.payload["intent"]["task_type"], "code_analysis")
+            self.assertEqual(response.payload["task_result"]["task_type"], "code_analysis")
+            self.assertEqual(response.payload["task_result"]["status"], "completed")
 
     def test_chat_rejects_missing_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:

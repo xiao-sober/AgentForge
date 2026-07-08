@@ -42,6 +42,8 @@ class MemoryManagerTest(unittest.TestCase):
             self.assertEqual(context["retrieval"]["episode_count"], 1)
             self.assertEqual(context["retrieval"]["semantic_count"], 1)
             self.assertEqual(context["retrieval"]["episode_scores"][0]["rank"], 1)
+            self.assertEqual(memory.list_episodes(limit=1)[0]["episode_id"], episode["episode_id"])
+            self.assertEqual(memory.list_semantic_memory(limit=1)[0]["key"], "ui_review_skill")
 
 
 if __name__ == "__main__":

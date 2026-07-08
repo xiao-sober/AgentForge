@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from agentforge.agent.tools import AgentTool, ToolFieldSpec, ToolRegistry, ToolSchema
+from agentforge.tools import AgentTool, ToolFieldSpec, ToolRegistry, ToolSchema
 
 
 _JSON_SCHEMA_TYPES = {
@@ -30,12 +30,7 @@ def registry_model_schemas(
     registry: ToolRegistry,
     allowed_tool_names: set[str] | list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    names = (
-        sorted(allowed_tool_names)
-        if allowed_tool_names is not None
-        else [item["name"] for item in registry.list_tools()]
-    )
-    return [agent_tool_to_model_schema(registry.get(name)) for name in names]
+    return registry.schema_for_model(allowed_tool_names)
 
 
 def tool_schema_to_json_schema(schema: ToolSchema) -> dict[str, Any]:

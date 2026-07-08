@@ -96,6 +96,37 @@ def build_plan(intent: Intent, selected_skill: SkillCandidate | None) -> AgentPl
             ],
             rationale="The input is empty.",
         )
+    if intent.task_type in {"trace_diagnosis", "skill_evolve", "code_analysis", "document_analysis", "data_analysis"}:
+        return AgentPlan(
+            action="route_task",
+            objective=objective,
+            complexity="simple",
+            subtasks=[intent.query],
+            stop_conditions=stop_conditions,
+            steps=[
+                _step(
+                    f"route_{intent.task_type}",
+                    f"dispatch {intent.task_type} through the Task Router",
+                    "execute_plan",
+                    tool_input={
+                        "task_type": intent.task_type,
+                        "input": intent.task_input,
+                        "options": intent.task_options,
+                    },
+                    expected_output="Task Router execution result.",
+                ),
+                _step(
+                    "build_response",
+                    "summarize task router output",
+                    "build_response",
+                    depends_on=["step_001"],
+                    expected_output="Readable Agent response.",
+                    permission_required="write",
+                    step_number=2,
+                ),
+            ],
+            rationale=f"The parsed intent maps to executable task type {intent.task_type}.",
+        )
     if intent.intent_type == "generate_skill":
         return AgentPlan(
             action="generate_skill",
@@ -334,6 +365,16 @@ def _step(
 def _objective_for_intent(intent: Intent) -> str:
     if intent.intent_type == "empty":
         return "Validate the empty input."
+    if intent.task_type == "trace_diagnosis":
+        return "Diagnose a local trace through the Task Router."
+    if intent.task_type == "skill_evolve":
+        return "Route Skill evolution through the Task Router."
+    if intent.task_type == "code_analysis":
+        return "Analyze code through the Task Router."
+    if intent.task_type == "document_analysis":
+        return "Analyze documents through the Task Router."
+    if intent.task_type == "data_analysis":
+        return "Analyze data through the Task Router."
     if intent.intent_type == "generate_skill":
         return "Generate a reusable versioned Skill from the user's requirement."
     if intent.requires_skill:
