@@ -127,12 +127,13 @@ def _resolve_sources(request: TaskRequest, root: Path) -> list[DataSource]:
         if not sources:
             sources.extend(_sources_from_path_mentions(input_text, root))
         if not sources:
+            inline_content = _clean_inline_data_content(input_text, explicit_format)
             sources.append(
                 DataSource(
                     name="request",
                     kind="inline",
-                    content=_strip_data_fence(input_text),
-                    format=explicit_format or _guess_format_from_content(input_text),
+                    content=inline_content,
+                    format=explicit_format or _guess_format_from_content(inline_content),
                 )
             )
     if not sources:
@@ -400,6 +401,94 @@ def _strip_data_fence(text: str) -> str:
         lines = stripped.splitlines()
         return "\n".join(lines[1:-1]).strip()
     return stripped
+
+
+def _clean_inline_data_content(text: str, explicit_format: str | None = None) -> str:
+    stripped = _strip_data_fence(text)
+    if not stripped:
+        return stripped
+    guessed_format = _guess_format_from_content(stripped)
+    if guessed_format in {"json", "jsonl"}:
+        return stripped
+    delimited_block = _extract_delimited_block(stripped, explicit_format)
+    if delimited_block:
+        return delimited_block
+    json_block = _extract_json_block(stripped)
+    if json_block:
+        return json_block
+    return stripped
+
+
+def _extract_delimited_block(text: str, explicit_format: str | None = None) -> str:
+    lines = text.splitlines()
+    delimiters = _candidate_delimiters(explicit_format)
+    for start_index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        for delimiter in delimiters:
+            width = _delimited_width(stripped, delimiter)
+            if width < 2:
+                continue
+            next_index = _next_non_empty_line_index(lines, start_index + 1)
+            next_width = _delimited_width(lines[next_index].strip(), delimiter) if next_index is not None else 0
+            if next_width != width:
+                continue
+            block = _collect_delimited_block(lines[start_index:], delimiter, width)
+            if len(block) >= 2:
+                return "\n".join(block).strip()
+    return ""
+
+
+def _candidate_delimiters(explicit_format: str | None = None) -> list[str]:
+    if explicit_format == "tsv":
+        return ["\t"]
+    if explicit_format == "csv":
+        return [","]
+    return [",", "\t"]
+
+
+def _next_non_empty_line_index(lines: list[str], start_index: int) -> int | None:
+    for index in range(start_index, len(lines)):
+        if lines[index].strip():
+            return index
+    return None
+
+
+def _collect_delimited_block(lines: list[str], delimiter: str, expected_width: int) -> list[str]:
+    block: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if block:
+                break
+            continue
+        if _delimited_width(stripped, delimiter) != expected_width:
+            if block:
+                break
+            continue
+        block.append(stripped)
+    return block
+
+
+def _delimited_width(line: str, delimiter: str) -> int:
+    try:
+        return len(next(csv.reader([line], delimiter=delimiter)))
+    except csv.Error:
+        return 0
+
+
+def _extract_json_block(text: str) -> str:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char not in "{[":
+            continue
+        try:
+            _, end_index = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        return text[index : index + end_index].strip()
+    return ""
 
 
 def _guess_format_from_content(text: str) -> str | None:

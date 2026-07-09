@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
+from anyio import to_thread
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
@@ -34,11 +36,14 @@ async def dispatch_legacy_request(request: Request, path: str, *, prefix_api_url
             {"error": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes."},
             status_code=413,
         )
-    legacy_response = handle_request(
-        request.method,
-        _raw_path(path, request),
-        body=body,
-        project_root=request.app.state.project_root,
+    legacy_response = await to_thread.run_sync(
+        partial(
+            handle_request,
+            request.method,
+            _raw_path(path, request),
+            body=body,
+            project_root=request.app.state.project_root,
+        )
     )
     return to_fastapi_response(legacy_response, prefix_api_urls=prefix_api_urls)
 

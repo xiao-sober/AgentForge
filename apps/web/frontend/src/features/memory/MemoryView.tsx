@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getJson } from "../../api";
+import { formatBeijingShort } from "../../datetime";
 import type { I18nKey } from "../../i18n";
 import type { JsonRecord, MemoryEpisodeRecord, SemanticMemoryRecord } from "../../types";
 
@@ -51,24 +52,26 @@ export function MemoryView({ active, t }: MemoryViewProps) {
         </button>
       </div>
 
-      <div className="memory-toolbar">
-        <label htmlFor="memoryQuery">{t("query")}</label>
-        <input
-          id="memoryQuery"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              void loadMemory();
-            }
-          }}
-        />
-        <button type="button" onClick={() => void loadMemory()}>
-          {t("search")}
-        </button>
-      </div>
+      <div className="memory-controls">
+        <div className="memory-toolbar">
+          <label htmlFor="memoryQuery">{t("query")}</label>
+          <input
+            id="memoryQuery"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                void loadMemory();
+              }
+            }}
+          />
+          <button type="button" onClick={() => void loadMemory()}>
+            {t("search")}
+          </button>
+        </div>
 
-      {error ? <div className="inline-error">{error}</div> : null}
+        {error ? <div className="inline-error compact">{error}</div> : null}
+      </div>
 
       <div className="memory-grid">
         <MemoryColumn title={t("latestEpisodes")} count={episodes.length} emptyText={t("noEpisodes")}>
@@ -76,7 +79,7 @@ export function MemoryView({ active, t }: MemoryViewProps) {
             <article className="memory-row" key={episode.episode_id || `${episode.created_at || "episode"}-${index}`}>
               <div>
                 <strong>{episode.user_input || episode.episode_id || t("episode")}</strong>
-                <time>{episode.created_at || "-"}</time>
+                <time>{formatBeijingShort(episode.created_at)}</time>
               </div>
               <p>{truncate(String(episode.response || episode.summary || "-"), 220)}</p>
               <MemoryMeta record={episode} />
@@ -89,7 +92,7 @@ export function MemoryView({ active, t }: MemoryViewProps) {
             <article className="memory-row" key={record.key || `${record.updated_at || "semantic"}-${index}`}>
               <div>
                 <strong>{record.key || t("semantic")}</strong>
-                <time>{record.updated_at || "-"}</time>
+                <time>{formatBeijingShort(record.updated_at)}</time>
               </div>
               <p>{truncate(String(record.summary || record.description || record.purpose || "-"), 220)}</p>
               <MemoryMeta record={record} />

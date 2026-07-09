@@ -21,3 +21,4 @@ traces/*
 !traces/.gitkeep
 docs/tool_calling_provider_dry_run_report.md
 docs/tool_calling_agent_completion_status.md
+docs/agent_framework_file_analysis.md

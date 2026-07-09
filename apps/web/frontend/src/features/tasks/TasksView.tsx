@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJson, postJson } from "../../api";
+import { formatBeijingShort } from "../../datetime";
 import type { I18nKey } from "../../i18n";
 import type { JsonRecord, RunRecord, TaskTypeRecord } from "../../types";
 
@@ -188,7 +189,7 @@ function RecentRuns({ runs, t }: { runs: RunRecord[]; t: (key: I18nKey) => strin
             <li key={run.run_id}>
               <strong>{run.title || run.task_type}</strong>
               <span>
-                {run.status} · {run.created_at}
+                {run.status} · {formatBeijingShort(run.created_at)}
               </span>
             </li>
           ))}

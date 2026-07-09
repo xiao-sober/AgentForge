@@ -177,7 +177,8 @@ class AgentHarness:
         loop.execute(ToolCall("execute_plan"))
         observe_result = loop.execute(ToolCall("observe_execution"))
         _mark_plan_tool_status(state, "observe_execution", observe_result.status)
-        if state["execution"].selected_skill:
+        execution_state = state.get("execution")
+        if isinstance(execution_state, ExecutionResult) and execution_state.selected_skill:
             semantic_result = loop.execute(ToolCall("update_semantic_memory"))
             _mark_plan_tool_status(state, "update_semantic_memory", semantic_result.status)
         response_result = loop.execute(ToolCall("build_response"))
@@ -678,13 +679,31 @@ class AgentHarness:
             return ToolResult(output={"plan": plan.to_dict()})
 
         def run_execution_plan(_: dict[str, Any]) -> ToolResult:
-            execution = execute_plan(
-                state["plan"],
-                state["intent"],
-                state.get("selected_skill"),
-                project_root=self.project_root,
-                llm_client=self.llm_client,
-            )
+            plan = state.get("plan")
+            selected_skill = state.get("selected_skill")
+            try:
+                execution = execute_plan(
+                    state["plan"],
+                    state["intent"],
+                    selected_skill,
+                    project_root=self.project_root,
+                    llm_client=self.llm_client,
+                )
+            except Exception as exc:
+                error = {
+                    "error_type": exc.__class__.__name__,
+                    "message": str(exc),
+                    "user_message": "Agent plan execution failed before a result could be produced.",
+                    "recoverable": False,
+                }
+                errors.append(error)
+                if not isinstance(plan, AgentPlan):
+                    plan = _failed_agent_plan(str(state.get("user_input") or ""), error)
+                    state["plan"] = plan
+                execution = _failed_execution_result(plan, selected_skill, error)
+                state["execution"] = execution
+                state["plan"] = _plan_with_status(plan, "failed", execution.plan_step_results)
+                return ToolResult(output={"execution": execution.to_dict()}, errors=[error], status="failed")
             errors.extend(execution.errors)
             artifacts.extend(execution.artifacts)
             state["execution"] = execution
@@ -1188,6 +1207,63 @@ def _tags_for_skill(skill_slug: str) -> list[str]:
 
 def _plan_status(errors: list[dict[str, Any]]) -> str:
     return "failed" if _has_blocking_error(errors) else "completed"
+
+
+def _failed_agent_plan(user_input: str, error: dict[str, Any]) -> AgentPlan:
+    return AgentPlan(
+        action="failed_execution",
+        steps=[],
+        rationale=f"Planning or execution state was incomplete: {error.get('error_type', 'Error')}.",
+        objective=user_input,
+        complexity="simple",
+        max_steps=0,
+    )
+
+
+def _failed_execution_result(
+    plan: AgentPlan,
+    selected_skill: Any,
+    error: dict[str, Any],
+) -> ExecutionResult:
+    selected = selected_skill if isinstance(selected_skill, SkillCandidate) else None
+    step_results = [
+        {
+            "plan_step_id": step.step_id,
+            "plan_step_name": step.name,
+            "task_id": None,
+            "status": "failed" if step.tool_name == "execute_plan" else step.status,
+            "output_path": None,
+            "error": error.get("message"),
+            "note": "execution_result_unavailable",
+        }
+        for step in plan.steps
+        if step.tool_name == "execute_plan"
+    ]
+    step_statuses = {
+        step.step_id or step.name: "failed" if step.tool_name == "execute_plan" else step.status
+        for step in plan.steps
+    }
+    return ExecutionResult(
+        action=plan.action,
+        generated_skill=None,
+        selected_skill=selected,
+        run_result=None,
+        task_result=None,
+        output_text="",
+        artifacts=[],
+        errors=[error],
+        plan_step_results=step_results,
+        execution_state={
+            "status": "failed",
+            "current_step": None,
+            "step_statuses": step_statuses,
+            "completed_steps": [],
+            "failed_steps": [step_id for step_id, status in step_statuses.items() if status == "failed"],
+            "skipped_steps": [],
+            "transitions": [],
+            "reason": "execution_exception",
+        },
+    )
 
 
 def _mark_plan_tool_status(state: dict[str, Any], tool_name: str, status: str) -> None:

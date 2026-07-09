@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJson } from "../../api";
+import { formatBeijingDateTime, formatBeijingShort } from "../../datetime";
 import type { I18nKey } from "../../i18n";
 import type {
   HqsStatusRecord,
@@ -149,7 +150,7 @@ export function DashboardView({ active, t, onNavigate }: DashboardViewProps) {
                 <dt>{t("trace")}</dt>
                 <dd>{latestRun.trace_path ? traceLabel(latestRun.trace_path) : "-"}</dd>
                 <dt>{t("created")}</dt>
-                <dd>{latestRun.created_at}</dd>
+                <dd>{formatBeijingDateTime(latestRun.created_at)}</dd>
                 <dt>{t("toolCalls")}</dt>
                 <dd>{latestRunDetail?.tool_calls?.length || 0}</dd>
                 <dt>{t("artifacts")}</dt>
@@ -165,7 +166,7 @@ export function DashboardView({ active, t, onNavigate }: DashboardViewProps) {
                     <small>
                       {t("currentStep")}: {activeCheckpoint.currentStep}
                     </small>
-                    <time>{activeCheckpoint.createdAt}</time>
+                    <time>{formatBeijingDateTime(activeCheckpoint.createdAt)}</time>
                   </div>
                 </div>
               ) : (
@@ -258,7 +259,7 @@ function MiniRunList({ runs, t }: { runs: RunRecord[]; t: (key: I18nKey) => stri
           <div>
             <strong>{run.title || run.task_type}</strong>
             <small>
-              {run.task_type} · {run.created_at}
+              {run.task_type} · {formatBeijingShort(run.created_at)}
             </small>
           </div>
           <em>{run.status}</em>

@@ -6,18 +6,14 @@ import type { AgentMode, ConfigStatusRecord, HealthStatusRecord, ProviderSummary
 interface SettingsViewProps {
   active: boolean;
   t: (key: I18nKey) => string;
-  useProvider: boolean;
   agentMode: AgentMode;
-  onUseProvider: (value: boolean) => void;
   onAgentMode: (value: AgentMode) => void;
 }
 
 export function SettingsView({
   active,
   t,
-  useProvider,
   agentMode,
-  onUseProvider,
   onAgentMode
 }: SettingsViewProps) {
   const [health, setHealth] = useState<HealthStatusRecord | null>(null);
@@ -25,6 +21,7 @@ export function SettingsView({
   const [version, setVersion] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const agentModeLabel = agentMode === "tool_calling" ? t("toolCallingAgent") : t("harnessWorkflow");
 
   async function loadSettings() {
     setLoading(true);
@@ -69,12 +66,8 @@ export function SettingsView({
         <section className="settings-section primary-settings">
           <div className="section-heading">
             <h3>{t("runMode")}</h3>
-            <span className="badge">{agentMode}</span>
+            <span className="badge">{agentModeLabel}</span>
           </div>
-          <label className="toggle mode-toggle">
-            <input checked={useProvider} type="checkbox" onChange={(event) => onUseProvider(event.target.checked)} />
-            <span>{t("useProvider")}</span>
-          </label>
           <label className="mode-select">
             <span>{t("agentMode")}</span>
             <select value={agentMode} onChange={(event) => onAgentMode(event.target.value as AgentMode)}>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJson, postJson } from "../../api";
+import { formatBeijingDateTime, formatBeijingShort } from "../../datetime";
 import type { I18nKey } from "../../i18n";
 import type { JsonRecord, TraceDetailRecord, TraceSummaryRecord } from "../../types";
 import { formatMetadataValue } from "../../view-model";
@@ -120,7 +121,7 @@ export function TraceViewer({ active, t }: TraceViewerProps) {
               >
                 <strong>{trace.filename}</strong>
                 <span>{trace.type || trace.error || t("unknown")}</span>
-                <small>{trace.created_at || "-"}</small>
+                <small>{formatBeijingShort(trace.created_at)}</small>
               </button>
             ))
           ) : (
@@ -183,7 +184,7 @@ function TraceMetadata({
       <dt>{t("traceId")}</dt>
       <dd>{detail?.trace_id || trace.trace_id || "-"}</dd>
       <dt>{t("created")}</dt>
-      <dd>{detail?.created_at || trace.created_at || "-"}</dd>
+      <dd>{formatBeijingDateTime(detail?.created_at || trace.created_at)}</dd>
       <dt>{t("steps")}</dt>
       <dd>{steps}</dd>
       <dt>{t("errors")}</dt>

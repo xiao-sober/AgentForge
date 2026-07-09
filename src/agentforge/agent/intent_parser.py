@@ -130,7 +130,7 @@ def parse_intent(user_input: str) -> Intent:
             reasons=["query_memory"],
         )
 
-    reserved_task_type = _reserved_task_type(lowered)
+    reserved_task_type = None if skill_hint and "skill" in lowered else _reserved_task_type(lowered)
     if reserved_task_type:
         return Intent(
             intent_type="reserved_task",
@@ -141,7 +141,7 @@ def parse_intent(user_input: str) -> Intent:
             confidence=0.7,
             reasons=[f"reserved_{reserved_task_type}"],
             task_type=reserved_task_type,
-            task_input={"input": raw_query if reserved_task_type == "code_analysis" else query},
+            task_input={"input": raw_query},
         )
 
     skill_action = _contains_any(
@@ -245,6 +245,66 @@ def _skill_evolution_options(query: str) -> dict[str, Any]:
 
 def _reserved_task_type(lowered: str) -> str | None:
     normalized = lowered.replace("_", " ")
+    action_terms_zh = [
+        "\u5206\u6790",
+        "\u5ba1\u67e5",
+        "\u68c0\u67e5",
+        "\u8bc4\u5ba1",
+        "\u8bca\u65ad",
+        "\u8c03\u8bd5",
+        "\u603b\u7ed3",
+        "\u63d0\u53d6",
+        "\u6e05\u7406",
+    ]
+    if _contains_any(
+        normalized,
+        [
+            "\u4ee3\u7801",
+            "\u6e90\u7801",
+            "\u4ed3\u5e93",
+            "\u9879\u76ee",
+            "\u6a21\u5757",
+            "\u51fd\u6570",
+            "\u811a\u672c",
+            "\u524d\u7aef",
+            "\u540e\u7aef",
+        ],
+    ) and _contains_any(normalized, action_terms_zh):
+        return "code_analysis"
+    if _contains_any(
+        normalized,
+        [
+            "\u6587\u6863",
+            "\u6587\u4ef6",
+            "\u62a5\u544a",
+            "\u6587\u7ae0",
+            "\u8bba\u6587",
+            "\u8bf4\u660e",
+        ],
+    ) and _contains_any(normalized, action_terms_zh):
+        return "document_analysis"
+    if _contains_any(
+        normalized,
+        [
+            "\u6570\u636e",
+            "\u6570\u636e\u96c6",
+            "\u8868\u683c",
+            "\u7535\u5b50\u8868\u683c",
+        ],
+    ) and _contains_any(normalized, action_terms_zh):
+        return "data_analysis"
+    if re.search(r"\b(code|source|repository|repo|python|typescript|javascript|module|function)\b", normalized) and _contains_any(
+        normalized, action_terms_zh
+    ):
+        return "code_analysis"
+    if re.search(r"\b(document|pdf|docx|markdown|report|article|paper)\b", normalized) and _contains_any(
+        normalized, action_terms_zh
+    ):
+        return "document_analysis"
+    if re.search(r"\b(data|dataset|csv|excel|spreadsheet|jsonl|table)\b", normalized) and _contains_any(
+        normalized, action_terms_zh
+    ):
+        return "data_analysis"
     if re.search(r"\b(code|source|repository|repo|python|typescript|javascript|module|function)\b", normalized) and re.search(
         r"\b(analyze|analyse|review|inspect|debug|diagnose)\b",
         normalized,

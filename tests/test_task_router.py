@@ -186,6 +186,24 @@ This document explains the release scope and rollout plan.
             self.assertEqual(detail["steps"][0]["input"]["attempt"], 1)
             self.assertIn("workflow_input", detail["steps"][0]["input"])
 
+    def test_data_analysis_extracts_csv_after_request_text(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            csv_text = "Analyze this CSV dataset and profile anomalies:\nname,score,active\nAda,10,true\nBob,,false\n"
+
+            result = route_task(
+                TaskRequest(task_type="data_analysis", input={"input": csv_text}),
+                project_root=root,
+            )
+
+            self.assertEqual(result.status, "completed")
+            summary = result.output["analysis"]["summary"]
+            self.assertEqual(summary["row_count"], 2)
+            self.assertEqual(summary["column_count"], 3)
+            self.assertEqual(summary["missing_value_count"], 1)
+            table = result.output["analysis"]["tables"][0]
+            self.assertEqual(table["columns"], ["name", "score", "active"])
+
     def test_schema_validation_rejects_invalid_input_shape(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with self.assertRaisesRegex(ValueError, "input.paths must be array"):

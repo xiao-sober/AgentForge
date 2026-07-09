@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agentforge.agent.harness import AgentHarness
 from agentforge.common.trace import write_trace
@@ -77,6 +78,20 @@ class AgentHarnessTest(unittest.TestCase):
             self.assertTrue(any(error.get("error_type") == "RuntimeError" for error in result.execution.errors))
             self.assertEqual(result.stop_reason, "blocking_error")
 
+    def test_execute_plan_exception_returns_failed_chat_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_skill(root)
+
+            with patch("agentforge.agent.harness.execute_plan", side_effect=RuntimeError("provider skill run exploded")):
+                result = AgentHarness(project_root=root).chat("Review dashboard layout readability.")
+
+            self.assertIn("could not complete", result.response)
+            self.assertEqual(result.execution.execution_state["status"], "failed")
+            self.assertEqual(result.run.status, "failed")
+            self.assertEqual(result.stop_reason, "blocking_error")
+            self.assertTrue(any(error.get("error_type") == "RuntimeError" for error in result.execution.errors))
+
     def test_generate_and_run_updates_each_plan_step_status(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -134,6 +149,24 @@ class AgentHarnessTest(unittest.TestCase):
             self.assertEqual(result.execution.task_result.status, "completed")
             self.assertIn("Code Analysis", result.response)
             self.assertIn("python_eval_exec", str(result.execution.task_result.output["analysis"]["findings"]))
+
+    def test_chat_routes_chinese_data_analysis_and_preserves_inline_csv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            result = AgentHarness(project_root=root).chat(
+                "\u5206\u6790\u8fd9\u4efd CSV \u6570\u636e\uff1a\nname,score,active\nAda,10,true\nBob,,false\n"
+            )
+
+            self.assertEqual(result.intent.intent_type, "reserved_task")
+            self.assertEqual(result.intent.task_type, "data_analysis")
+            self.assertEqual(result.plan.action, "route_task")
+            self.assertIsNotNone(result.execution.task_result)
+            self.assertEqual(result.execution.task_result.task_type, "data_analysis")
+            summary = result.execution.task_result.output["analysis"]["summary"]
+            self.assertEqual(summary["row_count"], 2)
+            self.assertEqual(summary["column_count"], 3)
+            self.assertEqual(summary["missing_value_count"], 1)
 
 
 def _write_skill(root: Path) -> Path:

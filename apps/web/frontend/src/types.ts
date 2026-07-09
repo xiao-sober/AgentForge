@@ -1,6 +1,7 @@
 export type Lang = "zh" | "en";
 export type AgentMode = "harness_workflow" | "tool_calling";
 export type TabKey =
+  | "agent"
   | "dashboard"
   | "chat"
   | "generate"
@@ -27,6 +28,18 @@ export interface ArtifactItem {
   type?: string;
   path?: string;
   relative_path?: string;
+}
+
+export interface UploadedFileRecord extends JsonRecord {
+  upload_id: string;
+  original_name: string;
+  stored_name: string;
+  relative_path: string;
+  url: string;
+  content_type: string;
+  size_bytes: number;
+  kind: string;
+  supported_tasks: string[];
 }
 
 export interface ScoreReport {
@@ -104,6 +117,7 @@ export interface WebPayload extends JsonRecord {
   memory_context?: JsonRecord;
   memory_retrieval?: JsonRecord;
   warnings?: WarningItem[];
+  provider_warnings?: WarningItem[];
   artifacts?: ArtifactItem[];
   timeline?: TimelineStep[];
   tool_call_timeline?: TimelineStep[];

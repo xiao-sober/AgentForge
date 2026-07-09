@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiUrl, getJson } from "../../api";
+import { formatBeijingDateTime } from "../../datetime";
 import type { I18nKey } from "../../i18n";
 import type {
   JsonRecord,
@@ -13,6 +14,7 @@ import type {
   TraceDetailRecord
 } from "../../types";
 import { formatMetadataValue, formatScore, traceLabel } from "../../view-model";
+import { ObservationMetricGrid, ObservationSection } from "./ObservationPrimitives";
 
 type CodeSeverity = "high" | "medium" | "low" | "info" | "unknown";
 
@@ -86,14 +88,7 @@ export function RunObservationPanel({ run, t }: { run: RunDetailRecord; t: (key:
         <h3>{t("observation")}</h3>
         <span className="badge">{run.status}</span>
       </div>
-      <div className="observation-summary">
-        {summary.map((item) => (
-          <div className={`observation-card ${item.tone}`} key={item.label}>
-            <span>{item.label}</span>
-            <strong>{item.value}</strong>
-          </div>
-        ))}
-      </div>
+      <ObservationMetricGrid items={summary} />
 
       <RunTracePreview trace={trace} traceError={traceError} traceFile={traceFile} loading={traceLoading} t={t} />
       <RunHqs reports={run.hqs_reports || []} t={t} />
@@ -125,11 +120,11 @@ function RunTracePreview({
   const traceUrl = traceFile ? apiUrl(`/traces/${encodeURIComponent(traceFile)}`) : undefined;
 
   return (
-    <section className="run-section observation-section">
-      <div className="section-heading">
-        <h3>{t("trace")}</h3>
-        {traceUrl ? <a href={traceUrl}>{traceFile}</a> : <span className="badge muted">{t("none")}</span>}
-      </div>
+    <ObservationSection
+      action={traceUrl ? <a href={traceUrl}>{traceFile}</a> : <span className="badge muted">{t("none")}</span>}
+      className="run-section observation-section"
+      title={t("trace")}
+    >
       {traceError ? <div className="inline-error compact">{traceError}</div> : null}
       {!traceFile ? <p className="muted-text">{t("noTrace")}</p> : null}
       {traceFile && loading ? <p className="muted-text">{t("loading")}</p> : null}
@@ -141,7 +136,7 @@ function RunTracePreview({
             <dt>{t("traceId")}</dt>
             <dd>{trace.trace_id || "-"}</dd>
             <dt>{t("created")}</dt>
-            <dd>{trace.created_at || "-"}</dd>
+            <dd>{formatBeijingDateTime(trace.created_at)}</dd>
             <dt>{t("steps")}</dt>
             <dd>{steps.length}</dd>
             <dt>{t("errors")}</dt>
@@ -166,7 +161,7 @@ function RunTracePreview({
           </details>
         </>
       ) : null}
-    </section>
+    </ObservationSection>
   );
 }
 
@@ -197,11 +192,7 @@ function TraceStepList({ steps, t }: { steps: unknown[]; t: (key: I18nKey) => st
 
 function RunHqs({ reports, t }: { reports: RunHqsRecord[]; t: (key: I18nKey) => string }) {
   return (
-    <section className="run-section observation-section">
-      <div className="section-heading">
-        <h3>{t("hqs")}</h3>
-        <span className="badge">{reports.length}</span>
-      </div>
+    <ObservationSection badge={String(reports.length)} className="run-section observation-section" title={t("hqs")}>
       {reports.length ? (
         <div className="run-hqs-grid observation-hqs-grid">
           {reports.map((report) => (
@@ -211,7 +202,7 @@ function RunHqs({ reports, t }: { reports: RunHqsRecord[]; t: (key: I18nKey) => 
       ) : (
         <p className="muted-text">{t("noHqsReports")}</p>
       )}
-    </section>
+    </ObservationSection>
   );
 }
 
@@ -255,11 +246,11 @@ function RunCodeAnalysis({ run, t }: { run: RunDetailRecord; t: (key: I18nKey) =
   const lineCount = numericField(summary, "line_count");
 
   return (
-    <section className="run-section code-analysis-panel observation-section">
-      <div className="section-heading">
-        <h3>{t("codeAnalysis")}</h3>
-        <span className="badge">{findingCount}</span>
-      </div>
+    <ObservationSection
+      badge={String(findingCount)}
+      className="run-section code-analysis-panel observation-section"
+      title={t("codeAnalysis")}
+    >
 
       <div className="code-analysis-summary">
         <Metric label={t("sources")} value={String(sourceCount)} />
@@ -326,7 +317,7 @@ function RunCodeAnalysis({ run, t }: { run: RunDetailRecord; t: (key: I18nKey) =
           </ul>
         </div>
       ) : null}
-    </section>
+    </ObservationSection>
   );
 }
 
@@ -341,11 +332,7 @@ function Metric({ label, value, tone }: { label: string; value: string; tone?: C
 
 function RunToolCalls({ toolCalls, t }: { toolCalls: RunToolCallRecord[]; t: (key: I18nKey) => string }) {
   return (
-    <section className="run-section observation-section">
-      <div className="section-heading">
-        <h3>{t("toolCalls")}</h3>
-        <span className="badge">{toolCalls.length}</span>
-      </div>
+    <ObservationSection badge={String(toolCalls.length)} className="run-section observation-section" title={t("toolCalls")}>
       {toolCalls.length ? (
         <ol className="tool-call-list">
           {toolCalls.map((call) => (
@@ -356,8 +343,8 @@ function RunToolCalls({ toolCalls, t }: { toolCalls: RunToolCallRecord[]; t: (ke
                 <em>{call.status}</em>
               </div>
               <small>
-                {call.started_at}
-                {call.completed_at ? ` · ${call.completed_at}` : ""}
+                {formatBeijingDateTime(call.started_at)}
+                {call.completed_at ? ` · ${formatBeijingDateTime(call.completed_at)}` : ""}
               </small>
               <div className="tool-call-details">
                 <DetailJson title={t("toolArguments")} value={call.arguments} />
@@ -370,17 +357,13 @@ function RunToolCalls({ toolCalls, t }: { toolCalls: RunToolCallRecord[]; t: (ke
       ) : (
         <p className="muted-text">{t("none")}</p>
       )}
-    </section>
+    </ObservationSection>
   );
 }
 
 function RunArtifacts({ artifacts, t }: { artifacts: RunArtifactRecord[]; t: (key: I18nKey) => string }) {
   return (
-    <section className="run-section observation-section">
-      <div className="section-heading">
-        <h3>{t("artifacts")}</h3>
-        <span className="badge">{artifacts.length}</span>
-      </div>
+    <ObservationSection badge={String(artifacts.length)} className="run-section observation-section" title={t("artifacts")}>
       {artifacts.length ? (
         <ul className="artifact-list">
           {artifacts.map((artifact) => (
@@ -389,7 +372,7 @@ function RunArtifacts({ artifacts, t }: { artifacts: RunArtifactRecord[]; t: (ke
                 <strong>{artifact.type}</strong>
                 <span>{artifact.path || "-"}</span>
               </div>
-              <small>{artifact.content_type || artifact.created_at}</small>
+              <small>{artifact.content_type || formatBeijingDateTime(artifact.created_at)}</small>
               <DetailJson title={t("schema")} value={artifact.metadata} />
             </li>
           ))}
@@ -397,7 +380,7 @@ function RunArtifacts({ artifacts, t }: { artifacts: RunArtifactRecord[]; t: (ke
       ) : (
         <p className="muted-text">{t("none")}</p>
       )}
-    </section>
+    </ObservationSection>
   );
 }
 
@@ -410,11 +393,11 @@ function RunWorkflowCheckpoints({
 }) {
   const compactCheckpoints = checkpoints.slice(-12);
   return (
-    <section className="run-section observation-section">
-      <div className="section-heading">
-        <h3>{t("workflowCheckpoints")}</h3>
-        <span className="badge">{checkpoints.length}</span>
-      </div>
+    <ObservationSection
+      badge={String(checkpoints.length)}
+      className="run-section observation-section"
+      title={t("workflowCheckpoints")}
+    >
       {compactCheckpoints.length ? (
         <ol className="run-checkpoint-list">
           {compactCheckpoints.map((checkpoint) => {
@@ -432,7 +415,7 @@ function RunWorkflowCheckpoints({
                   <span className="checkpoint-meta">
                     {t("currentStep")}: {currentStep}
                   </span>
-                  <time>{checkpoint.created_at}</time>
+                  <time>{formatBeijingDateTime(checkpoint.created_at)}</time>
                 </div>
               </li>
             );
@@ -446,17 +429,13 @@ function RunWorkflowCheckpoints({
           {checkpoints.length - compactCheckpoints.length} {t("earlierCheckpointsHidden")}
         </p>
       ) : null}
-    </section>
+    </ObservationSection>
   );
 }
 
 function RunSteps({ steps, t }: { steps: RunStepRecord[]; t: (key: I18nKey) => string }) {
   return (
-    <section className="run-section observation-section">
-      <div className="section-heading">
-        <h3>{t("steps")}</h3>
-        <span className="badge">{steps.length}</span>
-      </div>
+    <ObservationSection badge={String(steps.length)} className="run-section observation-section" title={t("steps")}>
       <ol className="run-step-list">
         {steps.length ? (
           steps.map((step) => (
@@ -474,7 +453,7 @@ function RunSteps({ steps, t }: { steps: RunStepRecord[]; t: (key: I18nKey) => s
           <li>{t("timelineEmpty")}</li>
         )}
       </ol>
-    </section>
+    </ObservationSection>
   );
 }
 

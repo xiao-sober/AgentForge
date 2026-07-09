@@ -8,12 +8,14 @@ import unittest
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from unittest.mock import patch
 
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "web" / "backend"))
 
 from agentforge_web_backend.main import MAX_REQUEST_BODY_BYTES, create_app
+from agentforge.web.routes import WebResponse
 
 
 class WebFastApiTest(unittest.TestCase):
@@ -67,6 +69,20 @@ class WebFastApiTest(unittest.TestCase):
                 self.assertEqual(task["status"], "completed")
                 self.assertTrue(task["trace_url"].startswith("/api/traces/"))
 
+                uploaded = _post_multipart(
+                    f"http://{host}:{port}/api/uploads",
+                    "files",
+                    "sample.csv",
+                    b"name,score\nAda,10\n",
+                    "text/csv",
+                )
+                upload = uploaded["uploads"][0]
+                self.assertEqual(upload["kind"], "data")
+                self.assertIn("data_analysis", upload["supported_tasks"])
+                self.assertTrue(upload["relative_path"].startswith("data/uploads/"))
+                self.assertTrue((root / upload["relative_path"]).exists())
+                self.assertIn("Ada,10", _get_text(f"http://{host}:{port}{upload['url']}"))
+
                 tools = _get_json(f"http://{host}:{port}/api/tools")
                 self.assertTrue(any(item["name"] == "execute_plan" for item in tools["tools"]))
                 tool_detail = _get_json(f"http://{host}:{port}/api/tools/execute_plan")
@@ -118,6 +134,56 @@ class WebFastApiTest(unittest.TestCase):
                 server.should_exit = True
                 thread.join(timeout=10)
 
+    def test_legacy_chat_does_not_block_other_routes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            frontend_dist = _write_frontend_dist(root)
+            host = "127.0.0.1"
+            port = _free_port()
+            chat_started = threading.Event()
+
+            def slow_handle_request(method, raw_path, body=None, project_root="."):
+                if method == "POST" and raw_path == "/chat":
+                    chat_started.set()
+                    time.sleep(1.2)
+                    return WebResponse(status=200, payload={"response": "slow chat finished"})
+                if method == "GET" and raw_path == "/health":
+                    return WebResponse(status=200, payload={"status": "ok"})
+                return WebResponse(status=200, payload={})
+
+            with patch("agentforge_web_backend.legacy_bridge.handle_request", side_effect=slow_handle_request):
+                server = uvicorn.Server(
+                    uvicorn.Config(
+                        create_app(project_root=root, frontend_dist=frontend_dist),
+                        host=host,
+                        port=port,
+                        log_level="warning",
+                    )
+                )
+                thread = threading.Thread(target=server.run, daemon=True)
+                thread.start()
+                chat_thread = threading.Thread(
+                    target=lambda: _post_json(f"http://{host}:{port}/api/chat", {"message": "slow"}),
+                    daemon=True,
+                )
+                try:
+                    _wait_for_json(f"http://{host}:{port}/api/health")
+                    chat_thread.start()
+                    self.assertTrue(chat_started.wait(timeout=3))
+
+                    started = time.perf_counter()
+                    health = _get_json(f"http://{host}:{port}/api/health")
+                    elapsed = time.perf_counter() - started
+
+                    self.assertEqual(health["status"], "ok")
+                    self.assertLess(elapsed, 0.9)
+                    chat_thread.join(timeout=3)
+                    self.assertFalse(chat_thread.is_alive())
+                finally:
+                    server.should_exit = True
+                    chat_thread.join(timeout=3)
+                    thread.join(timeout=10)
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -163,6 +229,30 @@ def _post_json(url: str, payload):
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _post_multipart(url: str, field_name: str, filename: str, content: bytes, content_type: str):
+    boundary = "----agentforge-test-boundary"
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("ascii"),
+            (
+                f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8"),
+            content,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("ascii"),
+        ]
+    )
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         method="POST",
     )
     with urlopen(request, timeout=10) as response:
