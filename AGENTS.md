@@ -1,171 +1,108 @@
-﻿# AGENTS.md
+# AGENTS.md
 
 ## Project: AgentForge
 
-AgentForge is a local-first, observable, modular Agent system for Web chat scenarios. Its core loop is:
+AgentForge is evolving into a local-first, observable, governable, multi-agent autonomous platform.
 
-```text
-Requirement
-  -> Generate Skill
-  -> Run Skill
-  -> Evaluate with HQS
-  -> Reflect
-  -> Rewrite Skill
-  -> Version and Remember
-  -> Use in Agent
-```
+This file is the stable project rulebook for AI coding agents working in this repository. It should stay short and operational. Detailed roadmap, runtime design, and handoff state live in `docs/`.
 
-The goal is not to build a generic chatbot. The project should evolve toward a controllable Agent platform with:
+## Required Reading
 
-- Web chat entry
-- Agent harness and core execution loop
-- reusable versioned Skills
-- three-layer memory
-- autonomous Skill generation
-- autonomous Skill reinforcement
-- HQS diagnostics
-- readable traces for all important steps
+Before substantial work, read these files in order:
 
-Keep the MVP simple, local, transparent, and easy to debug.
+1. `docs/development_handoff.md`
+2. `docs/multi_agent_autonomous_platform_goal.md`
+3. `docs/runtime_governance_and_source_design.md`
+4. `README.md`
+5. Source files and tests around the module being changed
 
----
+If these files conflict, prefer the newest handoff and target documents unless the user explicitly gives a newer instruction.
 
-## Core Concepts
+## Current Source Of Truth
 
-- **Harness**: runtime container for receiving user input, creating traces, loading memory, selecting or generating Skills, executing steps, running diagnostics, and saving results.
-- **Agent**: the task understanding, planning, execution, reflection, and reinforcement subject.
-- **Skill**: a reusable `SKILL.md` containing purpose, usage conditions, workflow, constraints, quality criteria, and examples.
-- **Memory**: three-layer memory made of working memory, episodic memory, and semantic / Skill memory.
-- **Self-generation**: generating Skills from user conversations or requirements.
-- **Self-reinforcement**: improving Skills based on task results, HQS scores, and reflection.
-- **HQS**: Health & Quality Score, used to diagnose response, Skill, and system quality.
+- Long-term platform target: `docs/multi_agent_autonomous_platform_goal.md`
+- Runtime, governance, source, and policy design: `docs/runtime_governance_and_source_design.md`
+- Current progress and next-step state: `docs/development_handoff.md`
+- Usage and repository overview: `README.md`
 
----
+`AGENTS.md` should not duplicate the full roadmap. The old Skill-only Phase 1/2/3 roadmap is historical and must not be treated as the current project scope.
+
+## Core Direction
+
+The project target includes:
+
+- Agent runtime with typed state, graph execution, checkpoints, and resumability
+- Goal/task graph with autonomous planning, execution, review, reflection, and retry
+- Multi-agent roles such as supervisor, planner, executor, reviewer, critic, memory, and knowledge agents
+- File Source Management with `SourceRef` and a shared resolver for project files, uploads, imports, and explicit external mounts
+- Separate Memory, Knowledge, and Context systems
+- Governance for approval, budget, audit, rollback, resource locks, and risk control
+- Provider-based model routing, secret references, execution profiles, and observable artifacts
+- Skill generation and Skill evolution as platform assets, not the entire platform
 
 ## Development Principles
 
-Follow these rules throughout the project:
+Follow these principles throughout the repository:
 
-1. **Local-first**: the system must run locally. External APIs are optional integrations, not core requirements.
-2. **Observable**: important steps must produce inspectable traces.
-3. **File-based where practical**: Skills must be Markdown files. Traces, memory, and runs should use JSON, JSONL, SQLite, or other readable local formats.
-4. **Modular**: Web UI, Skill generation, Skill evolution, memory, HQS, and Agent harness must remain separated.
-5. **MVP-first**: implement the smallest working version before adding advanced behavior.
-6. **Version-safe**: never overwrite previous Skill versions. Always create `v1`, `v2`, `v3`, etc.
-7. **Deterministic before complex**: prefer simple local logic before adding opaque model behavior.
-8. **Trace failures**: user-facing errors should be understandable, and internal errors should be recorded in traces.
-9. **Provider-configured models**: model calls should go through provider adapters and local JSON config, not hardcoded API keys or platform-specific logic.
+1. Keep the system local-first. External APIs are optional integrations and must be replaceable.
+2. Make important steps observable through traces, artifacts, logs, or audit events.
+3. Prefer readable local formats such as Markdown, JSON, JSONL, SQLite, and explicit metadata files.
+4. Keep Web UI, runtime, tools, memory, knowledge, context, HQS, and Skill systems modular.
+5. Add autonomy only after the underlying operation is typed, traceable, and governable.
+6. Route model calls through provider/model adapters. Do not hardcode API keys or provider-specific logic in business code.
+7. Preserve user changes. Do not revert unrelated work.
+8. Prefer small typed modules, explicit paths, clear errors, and behavior-focused tests.
+9. Avoid hidden global state, silent failures, hardcoded absolute paths, and mixing UI logic with core Agent logic.
 
-Avoid hidden global state, silent failures, hardcoded absolute paths, large enterprise abstractions, and mixing UI logic with core Agent logic.
+## Handoff Rule
 
----
+Every completed, paused, or blocked development task must update `docs/development_handoff.md`.
 
-## Roadmap
+The handoff should record:
 
-Implement the project in three phases.
+- current phase or focus
+- completed work
+- in-progress or incomplete work
+- next recommended steps
+- key files changed
+- validation run or explicitly not run
+- important decisions, risks, and open questions
 
-### Phase 1: Generate `SKILL.md`
+If the handoff is not updated, the development task is not complete.
 
-Build the ability to transform a one-line requirement or multi-turn conversation into a valid, reusable Skill file.
+## File And Source Policy
 
-Required behavior:
+Do not make broad project-external file access by simply allowing arbitrary absolute paths.
 
-- parse requirement into a normalized structure
-- generate compliant Markdown through a configured model provider, with deterministic local generation available for tests and offline development
-- validate required Skill sections
-- save to `skills/<skill_slug>/v1/SKILL.md`
-- save a generation trace under `traces/`
-- expose CLI command:
+Use or introduce structured source handling:
 
-```bash
-agentforge generate-skill --input "帮我生成一个 UI 分析 Skill"
-```
+- `project`: files under the repository root
+- `uploaded`: files copied into the project-owned upload area
+- `imported`: files intentionally imported into project-owned storage
+- `external_mount`: explicitly configured read-only external locations
 
-Model provider configuration should live in `config/providers.json`, created from `config/providers.example.json`. Real API keys must not be committed.
+Project files and external files should be represented through `SourceRef`-style metadata and resolved through one shared file source layer. External mounts are read-only by default and must be explicit. System assets such as Skills, tasksets, traces, provider config, memory, knowledge indexes, and run artifacts should stay under project-owned directories.
 
-Do not implement autonomous reflection, Skill evolution, full Web chat, memory, or HQS automation in this phase.
+Private code, private documents, secrets, and sensitive source text must not be sent to external model or embedding APIs unless policy/configuration explicitly allows it.
 
-### Phase 2: Evolve Skills
+## Agent Runtime Policy
 
-Build a Skill improvement loop using task sets.
+New autonomous or multi-agent behavior must be:
 
-Required behavior:
+- stateful and resumable
+- traceable and auditable
+- bounded by model/tool budget
+- governed by permission and risk policy
+- safe around concurrent writes
+- able to preserve citations and artifact references
 
-- load a Skill version
-- load JSON or YAML task sets
-- run the Skill against each task
-- save outputs under `runs/<skill_slug>/<version>/<timestamp>/`
-- evaluate outputs with HQS
-- generate a reflection report
-- rewrite the Skill into the next version
-- save metadata, diff, and evolution trace
-- expose CLI command:
+Tool calls should have schema, timeout, risk level, permission behavior, artifacts, and audit records. High-risk operations need approval and a rollback or change-record strategy. Multi-agent writes to shared files, Skills, memory, knowledge indexes, artifacts, or budget state need resource locks or explicit rejection.
 
-```bash
-agentforge evolve-skill --skill skills/ui_review_skill/v1/SKILL.md --taskset tasksets/ui_review_basic.json --max-iterations 3
-```
+## Skill Rules
 
-Stop conditions should include max iterations, target HQS, minimum improvement, or user stop.
+Skills are versioned Markdown assets. Never overwrite previous Skill versions.
 
-### Phase 3: Full Agent System
-
-Integrate the complete system.
-
-Required behavior:
-
-- Web chat MVP
-- Agent harness
-- intent parsing
-- planner and executor
-- response builder
-- Skill selection and generation
-- three-layer memory
-- response-level, Skill-level, and system-level HQS
-- autonomous reinforcement when HQS is low
-- trace viewer or trace inspection path
-
-MVP routes:
-
-```text
-/chat
-/skills
-/skills/:skillName
-/skills/:skillName/:version
-/memory
-/traces
-/hqs
-```
-
----
-
-## Recommended Build Order
-
-Follow this order unless there is a clear reason to change it:
-
-1. project skeleton, base config, README, and CLI entry
-2. uv virtual environment and editable install
-3. Skill schema validation
-4. requirement parser
-5. provider-configured model client
-6. Skill writer
-7. Phase 1 CLI and traces
-8. task set loader
-9. Skill runner
-10. HQS evaluator
-11. reflector
-12. Skill rewriter
-13. version manager
-14. Phase 2 CLI
-15. memory manager
-16. Agent harness
-17. Web chat MVP
-18. autonomous reinforcement
-
----
-
-## Required Skill Format
-
-Every generated Skill must contain these sections:
+Every generated or evolved Skill must be validated before it is treated as usable. Required sections are:
 
 ```md
 # <Skill Name>
@@ -191,253 +128,33 @@ Every generated Skill must contain these sections:
 ## Version Notes
 ```
 
-Generated Skills must be validated before being treated as usable.
+## Trace, Artifact, Memory, And Knowledge Rules
 
----
+Major runs must produce trace or run records. Important tool calls, model calls, errors, generated files, decisions, and user approvals should be inspectable.
 
-## Suggested Structure
+Keep these systems separate:
 
-Prefer Python for the initial MVP unless the repository already chooses TypeScript.
+- Memory stores experience, preferences, corrections, episodes, and retrieval references.
+- Knowledge stores indexed project facts, documents, code summaries, Skill docs, artifact summaries, and multimodal assets with citations.
+- Context controls what each model call sees, including compression, selection, redaction, and prompt snapshots.
 
-```text
-agentforge/
-  src/
-    skill_generator/
-      __init__.py
-      requirement_parser.py
-      skill_schema.py
-      skill_writer.py
-      prompts.py
-    skill_evolver/
-      __init__.py
-      task_loader.py
-      skill_runner.py
-      hqs_evaluator.py
-      reflector.py
-      rewriter.py
-      version_manager.py
-      diff_writer.py
-    common/
-      llm_client.py
-      file_store.py
-      trace.py
-  skills/
-    .gitkeep
-  tasksets/
-    .gitkeep
-  runs/
-  traces/
-    .gitkeep
-  tests/
-  README.md
-  AGENTS.md
-```
+Vector indexing belongs to the Knowledge Layer. Memory can reference knowledge chunks, episodes, and artifacts but should not become an unstructured vector dump. Prompt snapshots are disabled or redacted by default unless the relevant policy allows storage.
 
-Phase 3 may add:
+## Testing Expectations
 
-```text
-apps/web/frontend/
-apps/web/backend/
-src/agent/
-src/memory/
-src/hqs/
-```
+Tests should verify behavior rather than implementation details.
 
----
+- Runtime, governance, source, memory, knowledge, context, and multi-agent changes should include focused unit or integration tests.
+- Web UI changes should run relevant lint/typecheck/build commands and visual checks when practical.
+- Docs-only changes should at least run `git diff --check` on changed Markdown/config files.
+- If validation cannot be run, record that explicitly in the handoff and final response.
 
-## Trace Requirements
+## Implementation Notes For Coding Agents
 
-Every major run must create a trace.
-
-Trace types:
-
-```text
-skill_generation
-skill_execution
-skill_evaluation
-skill_evolution
-agent_chat
-memory_update
-hqs_diagnosis
-```
-
-Minimum trace fields:
-
-```json
-{
-  "trace_id": "string",
-  "type": "string",
-  "created_at": "ISO timestamp",
-  "input": {},
-  "steps": [],
-  "output": {},
-  "artifacts": [],
-  "errors": []
-}
-```
-
----
-
-## HQS Rubrics
-
-HQS means Health & Quality Score.
-
-Skill-level HQS dimensions:
-
-- Task Completion
-- Instruction Following
-- Output Structure
-- Specificity
-- Robustness
-- Risk / Hallucination Control
-
-Response-level HQS dimensions:
-
-- Intent Satisfaction
-- Instruction Following
-- Completeness
-- Specificity
-- Safety / Risk Control
-- Memory Usefulness
-
-System-level HQS dimensions:
-
-- Tool Reliability
-- Memory Retrieval Quality
-- Skill Selection Accuracy
-- Trace Completeness
-- Recovery Ability
-- User Experience
-
-Each dimension uses a `0-5` score. Average the dimensions for the final HQS.
-
----
-
-## Memory Design
-
-Implement three memory layers:
-
-- **Working Memory**: current run state, recent messages, active Skill, current plan, intermediate results.
-- **Episodic Memory**: previous runs, conversations, generated Skills, execution results, HQS reports, reflections, and user corrections.
-- **Semantic / Skill Memory**: long-term Skill summaries, best versions, tags, reusable patterns, known strengths, and known weaknesses.
-
-The memory manager should provide:
-
-```text
-add_working_memory()
-get_working_memory()
-save_episode()
-search_episodes()
-upsert_semantic_memory()
-search_semantic_memory()
-retrieve_context_for_task()
-```
-
----
-
-## Testing Requirements
-
-Tests should verify behavior, not implementation details.
-
-Phase 1 tests:
-
-- requirement parsing
-- Skill schema validation
-- Skill writing
-- generation flow and trace creation
-
-Phase 2 tests:
-
-- task loading
-- Skill running
-- HQS scoring
-- reflection generation
-- rewriting
-- version management
-- evolution loop
-
-Phase 3 tests:
-
-- Agent harness
-- memory manager
-- Skill selection
-- HQS diagnostics
-- chat flow
-
----
-
-## Non-goals for Early MVP
-
-Do not implement these before the core loop works:
-
-- multi-agent collaboration
-- plugin marketplace
-- enterprise RBAC
-- distributed task queue
-- cloud deployment platform
-- complicated vector database dependency
-- visual workflow builder
-- mobile app
-- billing system
-
----
-
-## Documentation
-
-Update `README.md` after each phase. It should include:
-
-- what AgentForge is
-- core concepts
-- installation
-- quick start
-- generating a Skill
-- evolving a Skill
-- running the Agent
-- directory structure
-- Skill format
-- task set format
-- HQS scoring format
-- trace format
-- memory structure
-- roadmap
-
----
-
-## Commit Plan
-
-Suggested commit sequence:
-
-```text
-chore: initialize AgentForge project structure
-feat: add skill schema validation
-feat: add requirement parser
-feat: generate SKILL.md from requirement
-feat: add skill generation trace
-feat: add taskset loader
-feat: run skill on taskset
-feat: add HQS evaluator
-feat: add skill reflection report
-feat: add skill rewriter and version manager
-feat: add skill evolution CLI
-feat: add three-layer memory manager
-feat: add agent harness
-feat: add web chat MVP
-feat: connect HQS to autonomous reinforcement
-docs: update README and examples
-```
-
----
-
-## Implementation Notes for AI Coding Agents
-
-When working on this repository:
-
-1. Preserve previous Skill versions.
-2. Validate generated Skills before saving them as usable.
-3. Save traces for generation, execution, evaluation, and evolution.
-4. Keep generated artifacts readable and inspectable.
-5. Put prompts in dedicated files or modules.
-6. Load API keys from `config/providers.json` or environment references inside that JSON; never hardcode secrets.
-7. Prefer small functions, typed structures, explicit paths, and simple errors.
-8. Implement the smallest working version first when requirements are uncertain.
-9. Keep the core loop working before improving UI polish.
+- Use project patterns before adding new abstractions.
+- Keep prompts, policies, AgentSpecs, rubrics, and model routing config in dedicated versionable files or modules.
+- Keep generated artifacts readable and inspectable.
+- Preserve previous Skill versions and run artifacts.
+- Do not hardcode secrets, API keys, provider names, or machine-specific absolute paths.
+- Do not remove path/security checks without replacing them with the source governance model.
+- Read the current handoff before starting and update it before finishing.

@@ -19,6 +19,8 @@ skills/*
 !skills/.gitkeep
 traces/*
 !traces/.gitkeep
-docs/tool_calling_provider_dry_run_report.md
-docs/tool_calling_agent_completion_status.md
-docs/agent_framework_file_analysis.md
+docs/*
+!docs/development_handoff.md
+!docs/developer_usage.md
+!docs/runtime_governance_and_source_design.md
+!docs/multi_agent_autonomous_platform_goal.md
